@@ -44,6 +44,9 @@ func connectSQLite(path string) (*sqliteBackend, error) {
 	return &sqliteBackend{db: db}, nil
 }
 
+// A derived non-unique index adds no storage semantics or backup version.
+const resourceDomainIndex = `CREATE INDEX IF NOT EXISTS services_custom_domain ON services(custom_domain) WHERE custom_domain != ''`
+
 var schemaV7 = []string{`CREATE TABLE agents (id TEXT PRIMARY KEY,position INTEGER NOT NULL UNIQUE,payload TEXT NOT NULL CHECK(json_valid(payload)))`}
 var schemaV4 = []string{
 	`CREATE TABLE organizations (id TEXT PRIMARY KEY,position INTEGER NOT NULL UNIQUE,payload TEXT NOT NULL CHECK(json_valid(payload)))`,
@@ -60,6 +63,7 @@ var schema = append([]string{
 	`CREATE TABLE user_sites (user_id TEXT NOT NULL REFERENCES users(id), site_id TEXT NOT NULL REFERENCES sites(id), position INTEGER NOT NULL, PRIMARY KEY(user_id,site_id), UNIQUE(user_id,position))`,
 	`CREATE TABLE user_services (user_id TEXT NOT NULL REFERENCES users(id), service_id TEXT NOT NULL REFERENCES services(id), position INTEGER NOT NULL, PRIMARY KEY(user_id,service_id), UNIQUE(user_id,position))`,
 	`CREATE INDEX services_site ON services(site_id)`,
+	resourceDomainIndex,
 	`CREATE UNIQUE INDEX users_identity ON users(oidc_issuer,oidc_subject) WHERE oidc_issuer != ''`,
 }, append(append(schemaV3, schemaV4...), schemaV7...)...)
 
@@ -200,6 +204,9 @@ func openSQLite(path string) (backend, State, error) {
 		return nil, State{}, err
 	}
 	if err = Validate(&s); err != nil {
+		return nil, State{}, err
+	}
+	if _, err = b.db.Exec(resourceDomainIndex); err != nil {
 		return nil, State{}, err
 	}
 	if e := b.cache(s); e != nil {

@@ -54,6 +54,13 @@ func (s *Store) user(id string) (User, bool) {
 	return User{}, false
 }
 func (s *Store) site(id string) (Site, bool) {
+	if reader, ok := s.Repository.(state.ResourceReader); ok {
+		v, found, err := reader.SiteByID(id)
+		if err != nil {
+			return Site{}, false
+		}
+		return v, found
+	}
 	for _, v := range s.snapshot().Sites {
 		if v.ID == id {
 			return v, true
@@ -62,8 +69,33 @@ func (s *Store) site(id string) (Site, bool) {
 	return Site{}, false
 }
 func (s *Store) service(id string) (Service, bool) {
+	if reader, ok := s.Repository.(state.ResourceReader); ok {
+		v, found, err := reader.ServiceByID(id)
+		if err != nil {
+			return Service{}, false
+		}
+		return v, found
+	}
 	for _, v := range s.snapshot().Services {
 		if v.ID == id {
+			return v, true
+		}
+	}
+	return Service{}, false
+}
+func (s *Store) serviceByDomain(domain string) (Service, bool) {
+	if reader, ok := s.Repository.(state.ResourceReader); ok {
+		v, found, err := reader.ServiceByDomain(domain)
+		if err != nil {
+			return Service{}, false
+		}
+		return v, found
+	}
+	if domain == "" {
+		return Service{}, false
+	}
+	for _, v := range s.snapshot().Services {
+		if v.CustomDomain == domain {
 			return v, true
 		}
 	}

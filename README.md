@@ -30,6 +30,8 @@
 
 - [端到端验收矩阵](docs/e2e-acceptance.md)：前十九批回归覆盖与未验收范围；[控制面 HA 设计提案](docs/design/control-plane-ha.md)及[故障验收手册](docs/ha-operations.md)。
 
+- [资源定向查询设计](docs/design/resource-queries.md)与[索引操作](docs/resource-query-operations.md)：SQLite ID/域名点查、提交一致性和局部基准。
+
 ## 已实现
 
 - 控制台登录、管理员 / 成员两种角色、按整站或单独应用分配访问权限；支持直接编辑成员授权、自助改密和管理员重置成员密码。

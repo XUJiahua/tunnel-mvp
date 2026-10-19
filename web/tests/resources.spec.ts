@@ -313,6 +313,45 @@ test("bulk resources, custom domain, mounted application login/upload and live m
   await expect(next.getByRole("heading")).toHaveText(
     "Mounted internal console",
   );
+  // Change the indexed route while the server remains running. The old
+  // hostname must stop routing, and a fresh launch must use the new one.
+  await page
+    .getByRole("row")
+    .filter({ has: page.getByText("Mounted console", { exact: true }) })
+    .getByRole("button", { name: "编辑", exact: true })
+    .click();
+  await editor
+    .getByLabel("自定义访问域名", { exact: true })
+    .fill("updated.customer.localhost");
+  await editor.getByRole("button", { name: "保存", exact: true }).click();
+  await expect(editor).toHaveCount(0);
+  expect(
+    (
+      await next.goto("http://reports.customer.localhost:24880/team/")
+    )?.status(),
+  ).toBe(404);
+  const renamedPopup = page.waitForEvent("popup");
+  await page
+    .getByRole("row")
+    .filter({ has: page.getByText("Mounted console", { exact: true }) })
+    .getByRole("button", { name: "打开", exact: true })
+    .click();
+  const renamed = await renamedPopup;
+  await expect(renamed).toHaveURL(
+    "http://updated.customer.localhost:24880/team/",
+  );
+  await expect(renamed.getByRole("heading")).toHaveText(
+    "Internal application login",
+  );
+  await renamed.getByLabel("Application user").fill("operator");
+  await renamed
+    .getByLabel("Application password")
+    .fill("internal-app-password");
+  await renamed.getByRole("button", { name: "Sign in to application" }).click();
+  await expect(renamed.getByRole("heading")).toHaveText(
+    "Mounted internal console",
+  );
+  await renamed.close();
   await next.close();
   await page.getByRole("button", { name: "批量应用", exact: true }).click();
   await page.getByLabel("选择应用 Mounted console", { exact: true }).check();

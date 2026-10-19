@@ -44,12 +44,18 @@ func (s *Server) serviceForHost(host string) (Service, bool) {
 			id = ""
 		}
 	}
-	for _, svc := range s.store.snapshot().Services {
-		if svc.ID == id || svc.CustomDomain != "" && host == customHost(svc.CustomDomain, s.access) {
-			return svc, true
-		}
+	if id != "" {
+		return s.store.service(id)
 	}
-	return Service{}, false
+	domain := host
+	if s.access.Port() != "" {
+		name, port, err := net.SplitHostPort(host)
+		if err != nil || port != s.access.Port() {
+			return Service{}, false
+		}
+		domain = name
+	}
+	return s.store.serviceByDomain(domain)
 }
 func mountPath(raw string) string {
 	u, _ := url.Parse(raw)
