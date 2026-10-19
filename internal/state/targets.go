@@ -52,3 +52,21 @@ func ValidCustomDomain(host string) bool {
 	}
 	return true
 }
+
+func ValidateHealth(s Service) error {
+	if s.HealthMethod != "" && s.HealthMethod != "HEAD" && s.HealthMethod != "GET" {
+		return fmt.Errorf("health method must be HEAD or GET")
+	}
+	if s.HealthExpectedStatus != 0 && (s.HealthExpectedStatus < 200 || s.HealthExpectedStatus > 599) {
+		return fmt.Errorf("health expected status must be 0 (200–399) or 200–599")
+	}
+	if s.HealthPath != "" {
+		if len(s.HealthPath) > 256 || strings.HasPrefix(s.HealthPath, "/") || strings.HasSuffix(s.HealthPath, "/") {
+			return fmt.Errorf("health path must be relative plain segments, without leading/trailing slash")
+		}
+		if _, err := ApplicationURL("http://health.invalid/" + s.HealthPath + "/"); err != nil {
+			return err
+		}
+	}
+	return nil
+}

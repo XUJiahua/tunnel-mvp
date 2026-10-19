@@ -9,6 +9,7 @@ import {
   useState,
 } from "react";
 
+import { MonitoringHistory } from "./history";
 import { BulkApplications } from "./bulk";
 import { OrganizationsPanel } from "./organizations";
 import { AdministratorsPanel } from "./administrators";
@@ -43,6 +44,9 @@ type Service = {
   organizationID?: string;
   accessible?: boolean;
   customDomain?: string;
+  healthPath?: string;
+  healthMethod?: string;
+  healthExpectedStatus?: number;
   id: string;
   name: string;
   siteID: string;
@@ -503,6 +507,7 @@ export default function Home() {
     sites: ["站点", "连接你的数据面，建立安全的出站隧道。"],
     services: ["应用", "从这里进入已授权的内网服务。"],
     users: ["访问权限", "为成员分配整站或单独应用访问权限。"],
+    history: ["监控历史", "业务健康与响应延迟，按应用授权可见。"],
     bulk: ["批量应用", "批量创建、迁移或删除同组织应用。"],
     organizations: ["组织与角色", "设置组织边界、管理能力和角色成员。"],
     administrators: ["管理员", "管理全局管理员，敏感变更需要再次验证密码。"],
@@ -827,6 +832,7 @@ export default function Home() {
             ["sites", "server", "站点"],
             ["services", "apps", "应用"],
             ["sessions", "shield", "登录设备"],
+            ["history", "grid", "监控历史"],
             ...(permitted("members:manage")
               ? [["users", "users", "访问权限"]]
               : []),
@@ -1112,6 +1118,14 @@ export default function Home() {
               sites={sites}
               services={services}
               onChanged={() => refresh(user)}
+            />
+          )}
+          {tab === "history" && (
+            <MonitoringHistory
+              services={services.filter(
+                (s) =>
+                  s.accessible !== false || permitted("applications:manage"),
+              )}
             />
           )}
           {tab === "sessions" && (

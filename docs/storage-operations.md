@@ -2,7 +2,7 @@
 
 本手册适用于包含存储批次代码的构建。默认后端仍是 JSON；当前 Release 中的旧二进制不一定包含这些命令。先执行 `tunnel storage --help` 确认。
 
-当前资源批次使用 SQLite schema v5、backup v5，并继续读取旧 backup v1–v4。已有 SQLite v1–v4 首次被 Server、inspect 或 export 打开时会事务升级；**先用旧二进制导出并备份停机目录，再换程序**。失败不会留下部分 schema。回滚须使用升级前备份。详见 [OIDC 升级手册](oidc-operations.md)。
+当前监控批次使用 SQLite schema v6、backup v6，并继续读取旧 backup v1–v5。已有 SQLite v1–v5 首次被 Server、inspect 或 export 打开时会事务升级；**先用旧二进制导出并备份停机目录，再换程序**。失败不会留下部分 schema。回滚须使用升级前备份。详见 [OIDC 升级手册](oidc-operations.md)。
 
 ## 1. 选择后端
 
@@ -100,3 +100,5 @@ SQLite 正常采用 DELETE journal，事务完成后不应依赖 WAL 文件。�
 第五批起 restore 会清空未使用邀请，避免旧备份复活已消费 token；已有组成员和授权保留，详见 [用户组手册](groups-operations.md)。
 
 组织批次新增组织/角色与归属列（schema v4 / backup v4），v1–v3 事务升级；默认组织保持旧授权与校验和兼容。归属/角色业务约束见 [组织与角色设计](design/organizations-roles.md)。
+
+授权快照不包含 monitor.db 与审计；完整停机备份应同时执行 [运维归档](monitoring-operations.md)，恢复时先授权状态、再运维文件。

@@ -123,6 +123,9 @@ func Open(dir, kind string, initialize func() (State, error)) (*Store, error) {
 			_ = lock.Close()
 		}
 	}()
+	if err := CheckOperationsRestore(dir); err != nil {
+		return nil, err
+	}
 	jsonExists, err := exists(filepath.Join(dir, "state.json"))
 	if err != nil {
 		return nil, err

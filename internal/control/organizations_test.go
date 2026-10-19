@@ -111,6 +111,10 @@ func TestOrganizationBoundariesAndRoleRevocation(t *testing.T) {
 			t.Fatalf("cross-org mutation accepted %s %s: %s", c.method, c.path, body)
 		}
 	}
+	res, _ = f.request(t, "GET", "/api/services/"+foreign.ID+"/history", nil, ownerCookie, "")
+	if res.StatusCode != 404 {
+		t.Fatal("monitoring history crossed organization boundary")
+	}
 	for _, path := range []string{"/api/metrics", "/api/sessions"} {
 		res, _ = f.request(t, "GET", path, nil, ownerCookie, "")
 		if res.StatusCode != 403 {

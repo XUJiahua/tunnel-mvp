@@ -249,7 +249,12 @@ func (s *Server) checkService(parent context.Context, svc Service) probeReport {
 	defer cancel()
 	t := s.serviceTransport(svc)
 	client := &http.Client{Transport: t, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	req, err := http.NewRequestWithContext(ctx, "HEAD", svc.URL, nil)
+	req, err := http.NewRequestWithContext(ctx, func() string {
+		if svc.HealthMethod != "" {
+			return svc.HealthMethod
+		}
+		return "HEAD"
+	}(), probeURL(svc), nil)
 	if err != nil {
 		report.Failure = diagnostics.New("invalid_target", "configuration", err.Error())
 		return report
@@ -264,5 +269,8 @@ func (s *Server) checkService(parent context.Context, svc Service) probeReport {
 	report.Reachable = true
 	report.Status = resp.StatusCode
 	report.Healthy = resp.StatusCode >= 200 && resp.StatusCode < 400
+	if svc.HealthExpectedStatus != 0 {
+		report.Healthy = resp.StatusCode == svc.HealthExpectedStatus
+	}
 	return report
 }

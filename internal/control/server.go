@@ -25,6 +25,7 @@ import (
 )
 
 type Server struct {
+	history          *historyStore
 	oidc             *oidcLogin
 	accessMu         sync.RWMutex
 	liveMu           sync.Mutex
@@ -59,6 +60,9 @@ func New(c config.Server, password string) (*Server, error) {
 	if err := c.Validate(); err != nil {
 		return nil, err
 	}
+	if err := state.CheckOperationsRestore(c.DataDir); err != nil {
+		return nil, err
+	}
 	st, err := openStore(c.DataDir, c.Storage, c.AdminUsername, password)
 	if err != nil {
 		return nil, err
@@ -79,6 +83,25 @@ func New(c config.Server, password string) (*Server, error) {
 			return nil, err
 		}
 	}
+
+	history, err := openHistory(c.DataDir)
+	if err != nil {
+		af.Close()
+		st.Close()
+		return nil, fmt.Errorf("open monitoring history: %w", err)
+	}
+	s.history = history
+	ready := false
+	defer func() {
+		if !ready {
+			history.close()
+		}
+	}()
+	if err = s.loadHealthReports(); err != nil {
+		af.Close()
+		st.Close()
+		return nil, err
+	}
 	s.tunnel = remotedialer.New(func(r *http.Request) (string, bool, error) {
 		id, ok := s.authenticatedAgent(r)
 		return id, ok, nil
@@ -96,6 +119,7 @@ func New(c config.Server, password string) (*Server, error) {
 		return nil, err
 	}
 	s.startBackground()
+	ready = true
 	return s, nil
 }
 func (s *Server) Close() {
@@ -115,6 +139,7 @@ func (s *Server) Close() {
 	}
 	s.tunnelMu.Unlock()
 	s.tunnelWG.Wait()
+	s.history.close()
 	s.auditMu.Lock()
 	defer s.auditMu.Unlock()
 	s.auditFile.Close()
@@ -170,6 +195,7 @@ func (s *Server) Run(ctx context.Context) error {
 }
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/services/{id}/history", s.require(false, s.serviceHistory))
 	mux.HandleFunc("POST /api/services/bulk", s.require(true, s.bulkCreate))
 	mux.HandleFunc("POST /api/services/bulk-delete", s.require(true, s.bulkServices))
 	mux.HandleFunc("POST /api/services/bulk-move", s.require(true, s.bulkServices))
@@ -494,10 +520,13 @@ func (s *Server) listServices(w http.ResponseWriter, r *http.Request, u User) {
 }
 func (s *Server) createService(w http.ResponseWriter, r *http.Request, u User) {
 	var b struct {
-		Name         string `json:"name"`
-		SiteID       string `json:"siteID"`
-		URL          string `json:"url"`
-		CustomDomain string `json:"customDomain"`
+		Name                 string `json:"name"`
+		SiteID               string `json:"siteID"`
+		URL                  string `json:"url"`
+		CustomDomain         string `json:"customDomain"`
+		HealthPath           string `json:"healthPath"`
+		HealthMethod         string `json:"healthMethod"`
+		HealthExpectedStatus int    `json:"healthExpectedStatus"`
 	}
 	if !decode(w, r, &b) {
 		return
@@ -516,7 +545,7 @@ func (s *Server) createService(w http.ResponseWriter, r *http.Request, u User) {
 		fail(w, 400, err.Error())
 		return
 	}
-	svc := Service{CustomDomain: b.CustomDomain, ID: randomID()[:16], Name: b.Name, SiteID: b.SiteID, URL: target.String()}
+	svc := Service{HealthPath: b.HealthPath, HealthMethod: b.HealthMethod, HealthExpectedStatus: b.HealthExpectedStatus, CustomDomain: b.CustomDomain, ID: randomID()[:16], Name: b.Name, SiteID: b.SiteID, URL: target.String()}
 	err = s.store.update(func(st *State) error {
 		for _, site := range st.Sites {
 			if site.ID == b.SiteID && canManage(u, site.OrganizationID, "applications:manage") {

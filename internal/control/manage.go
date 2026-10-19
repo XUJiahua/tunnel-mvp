@@ -42,10 +42,13 @@ func (s *Server) updateSite(w http.ResponseWriter, r *http.Request, u User) {
 }
 func (s *Server) updateService(w http.ResponseWriter, r *http.Request, u User) {
 	var body struct {
-		Name         string  `json:"name"`
-		SiteID       *string `json:"siteID"`
-		CustomDomain *string `json:"customDomain"`
-		URL          string  `json:"url"`
+		Name                 string  `json:"name"`
+		SiteID               *string `json:"siteID"`
+		CustomDomain         *string `json:"customDomain"`
+		HealthPath           *string `json:"healthPath"`
+		HealthMethod         *string `json:"healthMethod"`
+		HealthExpectedStatus *int    `json:"healthExpectedStatus"`
+		URL                  string  `json:"url"`
 	}
 	if !decode(w, r, &body) {
 		return
@@ -60,6 +63,7 @@ func (s *Server) updateService(w http.ResponseWriter, r *http.Request, u User) {
 	defer unlock()
 	var out Service
 	changed := false
+	healthChanged := false
 	err = s.store.update(func(st *State) error {
 		for i := range st.Services {
 			if st.Services[i].ID == r.PathValue("id") && canManage(u, st.Services[i].OrganizationID, "applications:manage") {
@@ -90,6 +94,20 @@ func (s *Server) updateService(w http.ResponseWriter, r *http.Request, u User) {
 						changed = true
 					}
 				}
+				beforePath, beforeMethod, beforeStatus := svc.HealthPath, svc.HealthMethod, svc.HealthExpectedStatus
+				if body.HealthPath != nil {
+					svc.HealthPath = *body.HealthPath
+				}
+				if body.HealthMethod != nil {
+					svc.HealthMethod = *body.HealthMethod
+				}
+				if body.HealthExpectedStatus != nil {
+					svc.HealthExpectedStatus = *body.HealthExpectedStatus
+				}
+				if beforeMethod == "" {
+					beforeMethod = "HEAD"
+				}
+				healthChanged = beforePath != svc.HealthPath || beforeMethod != probeMethod(*svc) || beforeStatus != svc.HealthExpectedStatus
 				changed = changed || svc.URL != target.String()
 				svc.Name, svc.URL = body.Name, target.String()
 				out = st.Services[i]
@@ -104,6 +122,10 @@ func (s *Server) updateService(w http.ResponseWriter, r *http.Request, u User) {
 	}
 	if changed {
 		s.revokeService(out.ID)
+	} else if healthChanged {
+		s.monitorMu.Lock()
+		delete(s.reports, out.ID)
+		s.monitorMu.Unlock()
 	}
 	s.audit("service_updated", u.Username, out.SiteID, out.ID)
 	jsonOut(w, 200, out)

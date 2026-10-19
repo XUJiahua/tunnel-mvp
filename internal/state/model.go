@@ -42,12 +42,15 @@ type Site struct {
 	CreatedAt      time.Time `json:"createdAt"`
 }
 type Service struct {
-	CustomDomain   string `json:"customDomain,omitempty"`
-	OrganizationID string `json:"organizationID,omitempty"`
-	ID             string `json:"id"`
-	Name           string `json:"name"`
-	SiteID         string `json:"siteID"`
-	URL            string `json:"url"`
+	HealthPath           string `json:"healthPath,omitempty"`
+	HealthMethod         string `json:"healthMethod,omitempty"`
+	HealthExpectedStatus int    `json:"healthExpectedStatus,omitempty"`
+	CustomDomain         string `json:"customDomain,omitempty"`
+	OrganizationID       string `json:"organizationID,omitempty"`
+	ID                   string `json:"id"`
+	Name                 string `json:"name"`
+	SiteID               string `json:"siteID"`
+	URL                  string `json:"url"`
 }
 type Group struct {
 	OrganizationID string   `json:"organizationID,omitempty"`
@@ -138,7 +141,7 @@ func Validate(s *State) error {
 	}
 	for _, v := range s.Services {
 		_, err := ApplicationURL(v.URL)
-		if !resourceID.MatchString(v.ID) || services[v.ID] || !validName(v.Name) || !sites[v.SiteID] || err != nil || v.CustomDomain != "" && (!ValidCustomDomain(v.CustomDomain) || domains[v.CustomDomain]) {
+		if !resourceID.MatchString(v.ID) || services[v.ID] || !validName(v.Name) || !sites[v.SiteID] || err != nil || ValidateHealth(v) != nil || v.CustomDomain != "" && (!ValidCustomDomain(v.CustomDomain) || domains[v.CustomDomain]) {
 			return fmt.Errorf("invalid application or site reference %q", v.ID)
 		}
 		services[v.ID] = true

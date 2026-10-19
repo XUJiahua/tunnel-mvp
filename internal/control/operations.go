@@ -20,7 +20,7 @@ type pooledTransport struct {
 	service   Service
 	transport *http.Transport
 }
-type counters struct{ requests, errors, probes atomic.Uint64 }
+type counters struct{ requests, errors, probes, historyErrors atomic.Uint64 }
 
 // Pool keys are immutable application identities; different sites and targets
 // never share an HTTP connection. Every request still passes authorization.
@@ -131,6 +131,10 @@ func (s *Server) saveReport(svc Service, report probeReport) {
 	}
 	s.reports[svc.ID] = report
 	s.monitorMu.Unlock()
+	if err := s.history.save(svc, report); err != nil {
+		s.stats.historyErrors.Add(1)
+		slog.Error("monitoring history write failed", "service_id", svc.ID, "error", err)
+	}
 	if !exists || old.Reachable != report.Reachable || old.Healthy != report.Healthy {
 		s.recordDiagnostic("health_changed", User{Username: "system"}, report)
 	}
@@ -160,6 +164,7 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request, _ User) {
 	w.Header().Set("Cache-Control", "no-store")
 	metric(w, "tunnel_proxy_requests_total", "Authorized proxy requests.", "counter", s.stats.requests.Load())
 	metric(w, "tunnel_proxy_errors_total", "Proxy transport errors.", "counter", s.stats.errors.Load())
+	metric(w, "tunnel_monitor_storage_errors_total", "Monitoring history storage write failures.", "counter", s.stats.historyErrors.Load())
 	metric(w, "tunnel_probes_total", "Completed application probes.", "counter", s.stats.probes.Load())
 	s.liveMu.Lock()
 	active := len(s.live)
@@ -175,7 +180,7 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request, _ User) {
 	}
 	s.monitorMu.Lock()
 	defer s.monitorMu.Unlock()
-	fmt.Fprint(w, "# HELP tunnel_service_reachable Last probe received HTTP headers.\n# TYPE tunnel_service_reachable gauge\n# HELP tunnel_service_healthy Last HEAD returned HTTP 200-399.\n# TYPE tunnel_service_healthy gauge\n# HELP tunnel_service_probe_timestamp_seconds Last probe start timestamp.\n# TYPE tunnel_service_probe_timestamp_seconds gauge\n# HELP tunnel_service_probe_duration_seconds Last probe duration.\n# TYPE tunnel_service_probe_duration_seconds gauge\n")
+	fmt.Fprint(w, "# HELP tunnel_service_reachable Last probe received HTTP headers.\n# TYPE tunnel_service_reachable gauge\n# HELP tunnel_service_healthy Last probe matched the configured HTTP status policy.\n# TYPE tunnel_service_healthy gauge\n# HELP tunnel_service_probe_timestamp_seconds Last probe start timestamp.\n# TYPE tunnel_service_probe_timestamp_seconds gauge\n# HELP tunnel_service_probe_duration_seconds Last probe duration.\n# TYPE tunnel_service_probe_duration_seconds gauge\n")
 	for id, p := range s.reports {
 		reachable, healthy := 0, 0
 		if p.Reachable {

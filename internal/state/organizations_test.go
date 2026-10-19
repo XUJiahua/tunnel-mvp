@@ -88,7 +88,7 @@ func TestSQLiteV3OrganizationUpgradeRollback(t *testing.T) {
 			dir := t.TempDir()
 			r := mustOpen(t, dir, SQLite, initial)
 			db := r.disk.(*sqliteBackend).db
-			for _, sql := range []string{"ALTER TABLE services DROP COLUMN custom_domain", "DROP TABLE roles", "DROP TABLE organizations", "ALTER TABLE users DROP COLUMN organization_id", "ALTER TABLE users DROP COLUMN role_id", "ALTER TABLE sites DROP COLUMN organization_id", "ALTER TABLE services DROP COLUMN organization_id", "PRAGMA user_version=3"} {
+			for _, sql := range []string{"ALTER TABLE services DROP COLUMN health_path", "ALTER TABLE services DROP COLUMN health_method", "ALTER TABLE services DROP COLUMN health_expected_status", "ALTER TABLE services DROP COLUMN custom_domain", "DROP TABLE roles", "DROP TABLE organizations", "ALTER TABLE users DROP COLUMN organization_id", "ALTER TABLE users DROP COLUMN role_id", "ALTER TABLE sites DROP COLUMN organization_id", "ALTER TABLE services DROP COLUMN organization_id", "PRAGMA user_version=3"} {
 				if _, err := db.Exec(sql); err != nil {
 					t.Fatal(err)
 				}

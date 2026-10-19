@@ -94,6 +94,43 @@ func storageCommand(path *string) *cobra.Command {
 	}}
 	recovery.Flags().StringVar(&recoveryUsername, "username", "", "Existing administrator username")
 	_ = recovery.MarkFlagRequired("username")
+	var exportOpsPath, restoreOpsPath, validateOpsPath string
+	exportOps := &cobra.Command{Use: "export-operations", Short: "Offline verified archive of audit history and monitoring database", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+		c, err := effective(cmd)
+		if err != nil {
+			return err
+		}
+		summary, err := state.ExportOperations(c.DataDir, exportOpsPath)
+		if err != nil {
+			return err
+		}
+		return output(cmd, summary)
+	}}
+	exportOps.Flags().StringVar(&exportOpsPath, "output", "", "New private .tar.gz operational archive")
+	_ = exportOps.MarkFlagRequired("output")
+	restoreOps := &cobra.Command{Use: "restore-operations", Short: "Restore operational archive without overwriting; resumable after interruption", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+		c, err := effective(cmd)
+		if err != nil {
+			return err
+		}
+		summary, err := state.RestoreOperations(c.DataDir, restoreOpsPath)
+		if err != nil {
+			return err
+		}
+		return output(cmd, summary)
+	}}
+	restoreOps.Flags().StringVar(&restoreOpsPath, "input", "", "Verified operational archive; use the same file to resume")
+	_ = restoreOps.MarkFlagRequired("input")
+	validateOps := &cobra.Command{Use: "validate-operations", Short: "Check archive entries, checksums, gzip footer and monitoring integrity", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+		summary, err := state.ValidateOperations(validateOpsPath)
+		if err != nil {
+			return err
+		}
+		return output(cmd, summary)
+	}}
+	validateOps.Flags().StringVar(&validateOpsPath, "input", "", "Operational archive to validate")
+	_ = validateOps.MarkFlagRequired("input")
+	root.AddCommand(exportOps, restoreOps, validateOps)
 	root.AddCommand(inspect, export, migrate, restore, validate, recovery)
 	return root
 }

@@ -6,6 +6,9 @@ import { api } from "./api";
 type Site = { id: string; name: string };
 type Service = {
   customDomain?: string;
+  healthPath?: string;
+  healthMethod?: string;
+  healthExpectedStatus?: number;
   id: string;
   siteID: string;
   name: string;
@@ -127,6 +130,9 @@ export function ResourceEditor({
           name: data.get("name"),
           url: data.get("url"),
           siteID: data.get("siteID"),
+          healthPath: data.get("healthPath"),
+          healthMethod: data.get("healthMethod"),
+          healthExpectedStatus: Number(data.get("healthExpectedStatus")),
           ...(globalAdmin ? { customDomain: data.get("customDomain") } : {}),
         });
       if (editor.kind === "grants")
@@ -191,6 +197,44 @@ export function ResourceEditor({
                 defaultValue={editor.service.url}
               />
             </label>
+            <fieldset className="grants">
+              <legend>业务健康检查</legend>
+              <label className="field">
+                <span>健康检查相对路径</span>
+                <input
+                  name="healthPath"
+                  defaultValue={editor.service.healthPath || ""}
+                  placeholder="ready 或 health/status"
+                  maxLength={256}
+                />
+              </label>
+              <label className="field">
+                <span>健康检查方法</span>
+                <select
+                  aria-label="健康检查方法"
+                  name="healthMethod"
+                  defaultValue={editor.service.healthMethod || "HEAD"}
+                >
+                  <option value="HEAD">HEAD</option>
+                  <option value="GET">GET</option>
+                </select>
+              </label>
+              <label className="field">
+                <span>健康预期状态</span>
+                <input
+                  type="number"
+                  name="healthExpectedStatus"
+                  min={0}
+                  max={599}
+                  defaultValue={editor.service.healthExpectedStatus || 0}
+                />
+              </label>
+              <p className="form-tip">
+                路径相对于应用挂载前缀；留空检查应用入口。状态 0 接受
+                200–399，或指定 200–599 的单个状态。检查不跟随重定向，不携带用户
+                Cookie。
+              </p>
+            </fieldset>
             <label className="field">
               <span>迁移目标站点</span>
               <select

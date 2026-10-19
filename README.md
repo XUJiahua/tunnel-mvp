@@ -22,6 +22,8 @@
 
 - [资源与路径设计](docs/design/resources-targets.md)与[迁移/域名/批量手册](docs/resource-operations.md)。
 
+- [监控与归档设计](docs/design/monitoring-history.md)与[运维手册](docs/monitoring-operations.md)：业务健康、历史图表和配对停机备份恢复。
+
 ## 已实现
 
 - 控制台登录、管理员 / 成员两种角色、按整站或单独应用分配访问权限；支持直接编辑成员授权、自助改密和管理员重置成员密码。
@@ -39,7 +41,7 @@
 - 退出、改密、删除、收回授权及会话到期主动关闭受影响的 WebSocket / SSE / HTTP 请求。
 - 登录设备列表、逐会话撤销、离线管理员恢复；OIDC back-channel/RP 退出及可选 acr/amr 策略，真实 Keycloak + OTP 双后端端到端测试。
 - Agent `--watch-config` 校验后自动重载本地 ACL，通过重连撤销旧连接。
-- 按应用隔离的 HTTP 连接池、周期 HEAD 探测、状态快照、Prometheus 指标与告警配置示例。
+- 按应用隔离的 HTTP 连接池、可配置业务健康检查、持久化历史与图表、状态快照、Prometheus 指标与告警配置示例。
 - JSON（默认）/ SQLite 状态存储、数据目录进程锁、离线迁移和带校验和的跨后端备份恢复。
 - JSONL 审计日志、大小轮转及控制台查询；密码 bcrypt、Agent 令牌 SHA-256 存储。
 - Docker 多阶段构建、Compose、GitHub Actions 构建与测试。
