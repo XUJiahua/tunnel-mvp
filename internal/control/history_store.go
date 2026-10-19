@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -19,7 +20,10 @@ const historyPerService = 1440
 const historyGlobal = 100000
 const monitorApplicationID = 0x544d4f4e
 
-type historyStore struct{ db *sql.DB }
+type historyStore struct {
+	db         *sql.DB
+	auditDirty atomic.Bool
+}
 type healthSample struct {
 	CheckedAt time.Time `json:"checkedAt"`
 	Reachable bool      `json:"reachable"`
@@ -98,7 +102,7 @@ func openHistory(dir string) (*historyStore, error) {
 	if err = db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
 		return nil, err
 	}
-	if app != monitorApplicationID || version != 1 {
+	if app != monitorApplicationID || (version < 1 || version > 2) {
 		return nil, fmt.Errorf("unsupported monitor database application/schema")
 	}
 	if err = db.QueryRow("PRAGMA quick_check").Scan(&integrity); err != nil || integrity != "ok" {
@@ -109,8 +113,13 @@ func openHistory(dir string) (*historyStore, error) {
 		return nil, e
 	}
 	rows.Close()
+	if err = ensureAuditSchema(db, version); err != nil {
+		return nil, err
+	}
 	ok = true
-	return &historyStore{db}, nil
+	result := &historyStore{db: db}
+	result.auditDirty.Store(true)
+	return result, nil
 }
 func (h *historyStore) close() error { return h.db.Close() }
 func (h *historyStore) save(svc Service, p probeReport) error {

@@ -1418,3 +1418,6 @@ td code {
 .history-controls { display:flex; align-items:end; gap:16px; flex-wrap:wrap; margin-bottom:20px; }
 .history-controls .field { flex:1; min-width:160px; }
 .history-chart { width:100%; max-height:260px; color:var(--muted); margin:20px 0; background:var(--surface, #fff); border-radius:12px; }
+
+.audit-filters { flex-wrap:wrap; }
+.audit-filters .field { min-width:150px; }

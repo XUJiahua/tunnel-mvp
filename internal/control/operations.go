@@ -1,9 +1,8 @@
 package control
 
 import (
-	"bufio"
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -20,7 +19,7 @@ type pooledTransport struct {
 	service   Service
 	transport *http.Transport
 }
-type counters struct{ requests, errors, probes, historyErrors atomic.Uint64 }
+type counters struct{ requests, errors, probes, historyErrors, auditIndexErrors atomic.Uint64 }
 
 // Pool keys are immutable application identities; different sites and targets
 // never share an HTTP connection. Every request still passes authorization.
@@ -164,6 +163,7 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request, _ User) {
 	w.Header().Set("Cache-Control", "no-store")
 	metric(w, "tunnel_proxy_requests_total", "Authorized proxy requests.", "counter", s.stats.requests.Load())
 	metric(w, "tunnel_proxy_errors_total", "Proxy transport errors.", "counter", s.stats.errors.Load())
+	metric(w, "tunnel_audit_index_errors_total", "Audit source/index writes or rebuild failures.", "counter", s.stats.auditIndexErrors.Load())
 	metric(w, "tunnel_monitor_storage_errors_total", "Monitoring history storage write failures.", "counter", s.stats.historyErrors.Load())
 	metric(w, "tunnel_probes_total", "Completed application probes.", "counter", s.stats.probes.Load())
 	s.liveMu.Lock()
@@ -193,8 +193,7 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request, _ User) {
 	}
 }
 
-// The console reads a bounded tail of the current audit file. Rotated files
-// remain available for backup and external log collection.
+// JSONL remains the source of truth; SQLite indexes all retained files.
 func (s *Server) listAudit(w http.ResponseWriter, r *http.Request, actor User) {
 	limit := 100
 	if raw := r.URL.Query().Get("limit"); raw != "" {
@@ -205,61 +204,46 @@ func (s *Server) listAudit(w http.ResponseWriter, r *http.Request, actor User) {
 		}
 		limit = n
 	}
+	epoch, before, err := parseAuditCursor(r.URL.Query().Get("cursor"))
+	if err != nil {
+		fail(w, 400, err.Error())
+		return
+	}
+	filters := auditFilters{Event: r.URL.Query().Get("event"), User: r.URL.Query().Get("user"), Site: r.URL.Query().Get("siteID"), Resource: r.URL.Query().Get("resourceID"), Epoch: epoch, Before: before, Limit: limit}
+	for _, value := range []string{filters.Event, filters.User, filters.Site, filters.Resource} {
+		if len(value) > 100 {
+			fail(w, 400, "audit filters must be at most 100 bytes")
+			return
+		}
+	}
+	if raw := r.URL.Query().Get("since"); raw != "" {
+		at, err := time.Parse(time.RFC3339Nano, raw)
+		if err != nil {
+			fail(w, 400, "since must be RFC3339")
+			return
+		}
+		filters.Since = at.UTC().Format(historyTimeLayout)
+	}
 	s.auditMu.Lock()
-	f, err := os.Open(s.auditFile.Name())
+	if s.history.auditDirty.Load() {
+		err = s.rebuildAuditIndex()
+	}
 	s.auditMu.Unlock()
 	if err != nil {
-		fail(w, 500, "could not read audit")
+		s.stats.auditIndexErrors.Add(1)
+		fail(w, 503, "audit index unavailable; retained JSONL files are unchanged")
 		return
 	}
-	defer f.Close()
-	info, err := f.Stat()
+	page, err := s.history.queryAudit(actor, filters)
 	if err != nil {
-		fail(w, 500, "could not read audit")
+		if errors.Is(err, errAuditIndexChanged) {
+			fail(w, 409, err.Error())
+		} else {
+			fail(w, 503, "audit index unavailable")
+		}
 		return
 	}
-	const maxTail int64 = 2 << 20
-	offset := max(int64(0), info.Size()-maxTail)
-	if _, err = f.Seek(offset, io.SeekStart); err != nil {
-		fail(w, 500, "could not read audit")
-		return
-	}
-	scanner := bufio.NewScanner(io.LimitReader(f, maxTail))
-	scanner.Buffer(make([]byte, 4096), 128<<10)
-	if offset > 0 {
-		scanner.Scan()
-	} // skip an incomplete first line
-	rows := []map[string]any{}
-	for scanner.Scan() {
-		var row map[string]any
-		if json.Unmarshal(scanner.Bytes(), &row) != nil {
-			continue
-		}
-		if actor.Role != "admin" {
-			org, ok := row["organizationID"].(string)
-			if !ok || org != actor.OrganizationID {
-				continue
-			}
-		}
-		if event := r.URL.Query().Get("event"); event != "" && row["event"] != event {
-			continue
-		}
-		if site := r.URL.Query().Get("siteID"); site != "" && row["siteID"] != site {
-			continue
-		}
-		rows = append(rows, row)
-		if len(rows) > limit {
-			rows = rows[1:]
-		}
-	}
-	if scanner.Err() != nil {
-		fail(w, 500, "could not scan audit")
-		return
-	}
-	for i, j := 0, len(rows)-1; i < j; i, j = i+1, j-1 {
-		rows[i], rows[j] = rows[j], rows[i]
-	}
-	jsonOut(w, 200, map[string]any{"entries": rows, "tailBytes": maxTail})
+	jsonOut(w, 200, page)
 }
 func (s *Server) rotateAudit() (err error) { // caller holds auditMu
 	info, err := s.auditFile.Stat()

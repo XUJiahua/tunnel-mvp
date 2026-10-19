@@ -97,6 +97,10 @@ func New(c config.Server, password string) (*Server, error) {
 			history.close()
 		}
 	}()
+	if err = s.rebuildAuditIndex(); err != nil {
+		s.stats.auditIndexErrors.Add(1)
+		slog.Error("audit index rebuild failed", "error", err)
+	}
 	if err = s.loadHealthReports(); err != nil {
 		af.Close()
 		st.Close()
@@ -151,8 +155,17 @@ func (s *Server) audit(event, user, site, resource string, fields ...map[string]
 	org, owned := auditOrganization(s.store.snapshot(), user, site, resource)
 	s.auditMu.Lock()
 	defer s.auditMu.Unlock()
+	info, statErr := s.auditFile.Stat()
+	rotating := statErr == nil && info.Size() >= int64(s.cfg.AuditMaxMB)<<20
 	if err := s.rotateAudit(); err != nil {
 		s.logRotationError(err)
+		rotating = true
+	}
+	if rotating {
+		if err := s.rebuildAuditIndex(); err != nil {
+			s.stats.auditIndexErrors.Add(1)
+			slog.Error("audit index rebuild failed", "error", err)
+		}
 	}
 	entry := map[string]any{"time": time.Now().UTC(), "event": event, "user": user, "siteID": site, "resourceID": resource}
 	if owned {
@@ -165,7 +178,16 @@ func (s *Server) audit(event, user, site, resource string, fields ...map[string]
 	}
 	err := json.NewEncoder(s.auditFile).Encode(entry)
 	if err != nil {
+		s.history.auditDirty.Store(true)
+		s.stats.auditIndexErrors.Add(1)
 		slog.Error("audit write failed", "error", err)
+		return
+	}
+	raw, _ := json.Marshal(entry)
+	if err = s.history.indexAudit(raw); err != nil {
+		s.history.auditDirty.Store(true)
+		s.stats.auditIndexErrors.Add(1)
+		slog.Error("audit index write failed", "error", err)
 	}
 }
 func (s *Server) Run(ctx context.Context) error {

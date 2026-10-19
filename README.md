@@ -24,6 +24,8 @@
 
 - [监控与归档设计](docs/design/monitoring-history.md)与[运维手册](docs/monitoring-operations.md)：业务健康、历史图表和配对停机备份恢复。
 
+- [审计索引设计](docs/design/audit-index.md)与[查询手册](docs/audit-operations.md)：全部保留文件、过滤和分页；[本地依赖补丁](docs/third-party-dependencies.md)。
+
 ## 已实现
 
 - 控制台登录、管理员 / 成员两种角色、按整站或单独应用分配访问权限；支持直接编辑成员授权、自助改密和管理员重置成员密码。

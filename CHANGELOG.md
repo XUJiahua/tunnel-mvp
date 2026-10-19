@@ -2,6 +2,9 @@
 
 ## 未发布
 
+- 全部保留审计文件索引、按组织/操作者/资源/时间过滤、有界分页与游标代际校验；monitor.db schema v2。
+- 固定源码本地修复 remotedialer 心跳/帧写 deadline 竞态，补嵌套模块 race/vet 与真实 socket 超时测试并保留许可。
+
 - 自定义业务健康路径/方法/预期状态、持久化监控历史和图表、健康存储失败指标；授权 schema/backup v6。
 - 停机审计/监控归档、完整 checksum/gzip/SQLite 校验和无覆盖/可续传恢复，pending 标记阻止不完整启动。
 

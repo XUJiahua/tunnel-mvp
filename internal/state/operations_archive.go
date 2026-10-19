@@ -92,7 +92,7 @@ func validateMonitorArchive(path string) error {
 	if err = db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
 		return err
 	}
-	if app != 0x544d4f4e || version != 1 {
+	if app != 0x544d4f4e || version < 1 || version > 2 {
 		return fmt.Errorf("unsupported monitoring archive database")
 	}
 	if err = db.QueryRow("PRAGMA quick_check").Scan(&integrity); err != nil || integrity != "ok" {
