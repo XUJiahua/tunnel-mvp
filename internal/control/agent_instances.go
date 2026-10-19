@@ -15,11 +15,11 @@ import (
 )
 
 type agentConnection struct {
-	key, siteID, instanceID, organizationID, remoteIP, version string
-	connectedAt                                                time.Time
-	cancel                                                     context.CancelFunc
-	closing                                                    atomic.Bool
-	channels                                                   atomic.Int64
+	key, siteID, instanceID, organizationID, remoteIP, version, policyVersion string
+	connectedAt                                                               time.Time
+	cancel                                                                    context.CancelFunc
+	closing                                                                   atomic.Bool
+	channels                                                                  atomic.Int64
 }
 
 func agentKey(site, instance string) string {
@@ -112,28 +112,37 @@ func (s *Server) dialSite(ctx context.Context, site, service, network, address s
 }
 
 type agentView struct {
-	RequiresRotation bool       `json:"requiresRotation"`
-	ID               string     `json:"id"`
-	SiteID           string     `json:"siteID"`
-	Name             string     `json:"name"`
-	Disabled         bool       `json:"disabled"`
-	Legacy           bool       `json:"legacy"`
-	Online           bool       `json:"online"`
-	CreatedAt        time.Time  `json:"createdAt"`
-	ConnectedAt      *time.Time `json:"connectedAt,omitempty"`
-	ActiveChannels   int64      `json:"activeChannels"`
-	RemoteIP         string     `json:"remoteIP,omitempty"`
-	ReportedVersion  string     `json:"reportedVersion,omitempty"`
+	AppliedPolicyVersion string     `json:"appliedPolicyVersion,omitempty"`
+	DesiredPolicyVersion string     `json:"desiredPolicyVersion"`
+	RequiresRotation     bool       `json:"requiresRotation"`
+	ID                   string     `json:"id"`
+	SiteID               string     `json:"siteID"`
+	Name                 string     `json:"name"`
+	Disabled             bool       `json:"disabled"`
+	Legacy               bool       `json:"legacy"`
+	Online               bool       `json:"online"`
+	CreatedAt            time.Time  `json:"createdAt"`
+	ConnectedAt          *time.Time `json:"connectedAt,omitempty"`
+	ActiveChannels       int64      `json:"activeChannels"`
+	RemoteIP             string     `json:"remoteIP,omitempty"`
+	ReportedVersion      string     `json:"reportedVersion,omitempty"`
 }
 
 func (s *Server) agentView(a state.AgentRegistration) agentView {
 	v := agentView{RequiresRotation: a.RequiresRotation, ID: a.ID, SiteID: a.SiteID, Name: a.Name, Disabled: a.Disabled, CreatedAt: a.CreatedAt}
+	p := a.Policy
+	if p == nil {
+		empty := state.EmptyAgentPolicy()
+		p = &empty
+	}
+	v.DesiredPolicyVersion = p.Version
 	if a.Disabled {
 		return v
 	}
 	for _, c := range s.connectedAgents(a.SiteID) {
 		if c.instanceID == a.ID {
 			v.Online = true
+			v.AppliedPolicyVersion = c.policyVersion
 			t := c.connectedAt
 			v.ConnectedAt = &t
 			v.ActiveChannels = c.channels.Load()

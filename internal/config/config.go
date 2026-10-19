@@ -52,12 +52,10 @@ type Server struct {
 	AuditBackups         int    `json:"auditBackups" mapstructure:"auditBackups"`
 	AdminUsername        string `json:"adminUsername" mapstructure:"adminUsername"`
 }
-type Rule struct {
-	CIDR  string `json:"cidr" mapstructure:"cidr"`
-	Host  string `json:"host,omitempty"`
-	Ports []int  `json:"ports" mapstructure:"ports"`
-}
+type Rule = state.NetworkRule
+
 type Agent struct {
+	RemotePolicy   bool   `json:"remotePolicy,omitempty" mapstructure:"remotePolicy"`
 	InstanceID     string `json:"instanceID,omitempty" mapstructure:"instanceID"`
 	RuntimeVersion string `json:"-" mapstructure:"-"`
 	Logging        `mapstructure:",squash"`
@@ -162,6 +160,9 @@ func (a *Agent) Validate() error {
 		return err
 	}
 	a.ServerURL = origin.String()
+	if a.RemotePolicy && a.InstanceID == "" {
+		return fmt.Errorf("remotePolicy requires an independently registered instanceID")
+	}
 	if a.InstanceID != "" && !state.ValidAgentID(a.InstanceID) {
 		return fmt.Errorf("invalid registered Agent instance ID")
 	}

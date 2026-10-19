@@ -1421,3 +1421,13 @@ td code {
 
 .audit-filters { flex-wrap:wrap; }
 .audit-filters .field { min-width:150px; }
+
+.agent-panel { display: grid; gap: 18px; }
+.agent-panel > p { color: var(--muted); line-height: 1.65; }
+.agent-panel form { display: grid; gap: 12px; padding: 20px; border: 1px solid var(--border); border-radius: 12px; background: white; }
+.agent-panel form .primary { justify-self: start; }
+.agent-panel td small { display: block; margin-top: 5px; overflow-wrap: anywhere; }
+.agent-panel td:last-child { min-width: 230px; }
+.agent-panel td button { margin: 3px; }
+.agent-panel textarea { width: 100%; min-height: 160px; font-family: monospace; }
+.agent-panel pre { overflow: auto; max-width: 100%; white-space: pre-wrap; overflow-wrap: anywhere; }

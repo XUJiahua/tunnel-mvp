@@ -8,13 +8,14 @@ import (
 )
 
 type AgentRegistration struct {
-	RequiresRotation bool      `json:"requiresRotation,omitempty"`
-	ID               string    `json:"id"`
-	SiteID           string    `json:"siteID"`
-	Name             string    `json:"name"`
-	TokenHash        string    `json:"tokenHash"`
-	Disabled         bool      `json:"disabled,omitempty"`
-	CreatedAt        time.Time `json:"createdAt"`
+	Policy           *AgentPolicy `json:"policy,omitempty"`
+	RequiresRotation bool         `json:"requiresRotation,omitempty"`
+	ID               string       `json:"id"`
+	SiteID           string       `json:"siteID"`
+	Name             string       `json:"name"`
+	TokenHash        string       `json:"tokenHash"`
+	Disabled         bool         `json:"disabled,omitempty"`
+	CreatedAt        time.Time    `json:"createdAt"`
 }
 
 func ValidAgentID(id string) bool { return id != "legacy" && resourceID.MatchString(id) }
@@ -26,6 +27,9 @@ func validateAgents(s *State) error {
 		tokens[site.TokenHash] = true
 	}
 	for _, a := range s.Agents {
+		if err := ValidateAgentPolicy(a.Policy); err != nil {
+			return err
+		}
 		hash, err := hex.DecodeString(a.TokenHash)
 		if !ValidAgentID(a.ID) || ids[a.ID] || !sites[a.SiteID] || !validName(a.Name) || err != nil || len(hash) != sha256.Size || tokens[a.TokenHash] || a.CreatedAt.IsZero() || (a.RequiresRotation && !a.Disabled) {
 			return fmt.Errorf("invalid agent registration or site reference")

@@ -133,6 +133,7 @@ func newRootCommand() *cobra.Command {
 		return agent.Run(cmd.Context(), c, os.Getenv("TUNNEL_AGENT_TOKEN"))
 	}}
 	agentCommand.PersistentFlags().String("server-url", "http://localhost:8080", "Public control plane origin")
+	agentCommand.PersistentFlags().Bool("remote-policy", false, "Opt in to remote policy narrowing within local allow rules")
 	agentCommand.PersistentFlags().String("instance-id", "", "Registered Agent instance ID; empty selects legacy site-token mode")
 	agentCommand.PersistentFlags().String("site-id", "", "Registered site ID")
 	agentCommand.PersistentFlags().String("allow", "", "Agent ACL rules as a JSON array (or TUNNEL_ALLOW)")

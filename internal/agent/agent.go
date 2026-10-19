@@ -24,6 +24,7 @@ type rule struct {
 	ports  map[string]bool
 }
 type Policy struct {
+	remote   *Policy
 	rules    []rule
 	resolver *net.Resolver
 	siteID   string
@@ -55,6 +56,9 @@ func NewPolicy(rules []config.Rule) (*Policy, error) {
 	return p, nil
 }
 func (p *Policy) allowed(host, port string, ip netip.Addr) bool {
+	return p.allowedLocal(host, port, ip) && (p.remote == nil || p.remote.allowedLocal(host, port, ip))
+}
+func (p *Policy) allowedLocal(host, port string, ip netip.Addr) bool {
 	ip = ip.Unmap()
 	if ip.IsUnspecified() || ip.IsMulticast() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
 		return false
@@ -134,6 +138,12 @@ func (p *Policy) DialContext(ctx context.Context, network, address string) (conn
 	return nil, d
 }
 func Run(ctx context.Context, c config.Agent, token string) error {
+	if c.RemotePolicy {
+		return runRemotePolicy(ctx, c, token, 5*time.Second, 30*time.Second)
+	}
+	return runConfigured(ctx, c, token, nil, "")
+}
+func runConfigured(ctx context.Context, c config.Agent, token string, remote *Policy, policyVersion string) error {
 	if len(token) < 32 {
 		return errors.New("TUNNEL_AGENT_TOKEN must contain the site token")
 	}
@@ -147,6 +157,7 @@ func Run(ctx context.Context, c config.Agent, token string) error {
 	if err != nil {
 		return err
 	}
+	p.remote = remote
 	p.siteID = c.SiteID
 	report, closeReporter := newReporter(ctx, c, token)
 	defer closeReporter()
@@ -165,7 +176,7 @@ func Run(ctx context.Context, c config.Agent, token string) error {
 		u.Scheme = "ws"
 	}
 	u.Path = "/tunnel/connect"
-	headers := http.Header{"Authorization": []string{"Bearer " + token}, "X-Tunnel-Site": []string{c.SiteID}, "X-Tunnel-Instance": []string{c.InstanceID}, "X-Tunnel-Version": []string{c.RuntimeVersion}}
+	headers := http.Header{"Authorization": []string{"Bearer " + token}, "X-Tunnel-Site": []string{c.SiteID}, "X-Tunnel-Instance": []string{c.InstanceID}, "X-Tunnel-Version": []string{c.RuntimeVersion}, "X-Tunnel-Policy": []string{policyVersion}}
 	dialer := &websocket.Dialer{Proxy: http.ProxyFromEnvironment, HandshakeTimeout: 15 * time.Second}
 	delay := time.Second
 	for ctx.Err() == nil {

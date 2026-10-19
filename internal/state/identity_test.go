@@ -31,7 +31,7 @@ func TestIdentityPersistenceAndBackup(t *testing.T) {
 			raw, _ := os.ReadFile(backup)
 			var b Backup
 			_ = json.Unmarshal(raw, &b)
-			if b.Version != 7 {
+			if b.Version != 8 {
 				t.Fatal("identity backup must be versioned against old readers")
 			}
 			for _, target := range []string{JSON, SQLite} {

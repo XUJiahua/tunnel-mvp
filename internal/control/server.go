@@ -220,6 +220,8 @@ func (s *Server) Run(ctx context.Context) error {
 }
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/sites/{id}/agents/{agentID}/policy", s.require(false, s.manageAgentPolicy))
+	mux.HandleFunc("PUT /api/sites/{id}/agents/{agentID}/policy", s.require(true, s.manageAgentPolicy))
 	mux.HandleFunc("GET /api/agents", s.require(false, s.listAgents))
 	mux.HandleFunc("GET /api/sites/{id}/agents", s.require(false, s.listAgents))
 	mux.HandleFunc("POST /api/sites/{id}/agents", s.require(true, s.createAgent))
@@ -305,6 +307,10 @@ func (s *Server) Handler() http.Handler {
 			s.gateway(w, r)
 			return
 		}
+		if r.URL.Path == "/tunnel/policy" {
+			s.receivePolicy(w, r)
+			return
+		}
 		if r.URL.Path == "/tunnel/diagnostics" {
 			s.receiveDiagnostic(w, r)
 			return
@@ -381,6 +387,11 @@ func (s *Server) connect(w http.ResponseWriter, r *http.Request) {
 	key := agentKey(siteID, instance)
 	site, _ := s.store.site(siteID)
 	remote, _, _ := net.SplitHostPort(r.RemoteAddr)
+	policyVersion := r.Header.Get("X-Tunnel-Policy")
+	if len(policyVersion) > 64 {
+		fail(w, 400, "invalid policy version")
+		return
+	}
 	version := r.Header.Get("X-Tunnel-Version")
 	if len(version) > 128 {
 		version = version[:128]
@@ -397,7 +408,7 @@ func (s *Server) connect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx, cancel := context.WithCancel(r.Context())
-	connection := &agentConnection{key: key, siteID: siteID, instanceID: instance, organizationID: site.OrganizationID, remoteIP: remote, version: version, connectedAt: time.Now().UTC(), cancel: cancel}
+	connection := &agentConnection{policyVersion: policyVersion, key: key, siteID: siteID, instanceID: instance, organizationID: site.OrganizationID, remoteIP: remote, version: version, connectedAt: time.Now().UTC(), cancel: cancel}
 	s.connections[key] = connection
 	s.tunnelWG.Add(1)
 	s.tunnelMu.Unlock()
