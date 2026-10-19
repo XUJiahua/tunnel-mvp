@@ -92,11 +92,41 @@ func validateMonitorArchive(path string) error {
 	if err = db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
 		return err
 	}
-	if app != 0x544d4f4e || version < 1 || version > 2 {
+	if app != 0x544d4f4e || version < 1 || version > 3 {
 		return fmt.Errorf("unsupported monitoring archive database")
 	}
 	if err = db.QueryRow("PRAGMA quick_check").Scan(&integrity); err != nil || integrity != "ok" {
 		return fmt.Errorf("monitoring archive integrity check failed")
+	}
+	queries := []string{"SELECT service_id,profile,checked_at,reachable,healthy,status,latency_ms,request_id,code,stage FROM samples LIMIT 0"}
+	if version >= 2 {
+		queries = append(queries, "SELECT organization_id,occurred_at,event,username,site_id,resource_id,payload FROM audit_events LIMIT 0", "SELECT epoch,file_count,skipped FROM audit_index_state WHERE singleton=1")
+	}
+	if version >= 3 {
+		queries = append(queries, "SELECT source_id FROM audit_events LIMIT 0", "SELECT id,slot,skipped FROM audit_sources LIMIT 0")
+	}
+	for _, q := range queries {
+		rows, e := db.Query(q)
+		if e != nil {
+			return fmt.Errorf("invalid monitoring archive schema: %w", e)
+		}
+		rows.Close()
+	}
+	rows, e := db.Query("PRAGMA foreign_key_check")
+	if e != nil {
+		return e
+	}
+	invalid := rows.Next()
+	rowErr := rows.Err()
+	rows.Close()
+	if invalid || rowErr != nil {
+		return fmt.Errorf("monitoring archive has invalid foreign keys")
+	}
+	if version >= 3 {
+		var invalidSources int
+		if e = db.QueryRow("SELECT count(*) FROM audit_sources WHERE id<1 OR slot<0 OR slot>20 OR skipped<0").Scan(&invalidSources); e != nil || invalidSources != 0 {
+			return fmt.Errorf("monitoring archive contains invalid audit sources")
+		}
 	}
 	return nil
 }

@@ -21,8 +21,10 @@ const historyGlobal = 100000
 const monitorApplicationID = 0x544d4f4e
 
 type historyStore struct {
-	db         *sql.DB
-	auditDirty atomic.Bool
+	db          *sql.DB
+	auditDirty  atomic.Bool
+	auditSource atomic.Int64
+	auditSize   atomic.Int64
 }
 type healthSample struct {
 	CheckedAt time.Time `json:"checkedAt"`
@@ -63,7 +65,7 @@ func openHistory(dir string) (*historyStore, error) {
 	if !strings.HasPrefix(normalized, "/") {
 		normalized = "/" + normalized
 	}
-	query := url.Values{"mode": {"rw"}, "_pragma": {"busy_timeout(1000)", "synchronous(FULL)"}}
+	query := url.Values{"mode": {"rw"}, "_pragma": {"busy_timeout(1000)", "synchronous(FULL)", "foreign_keys(1)"}}
 	db, err := sql.Open("sqlite", (&url.URL{Scheme: "file", Path: normalized, RawQuery: query.Encode()}).String())
 	if err != nil {
 		return nil, err
@@ -102,7 +104,7 @@ func openHistory(dir string) (*historyStore, error) {
 	if err = db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
 		return nil, err
 	}
-	if app != monitorApplicationID || (version < 1 || version > 2) {
+	if app != monitorApplicationID || (version < 1 || version > 3) {
 		return nil, fmt.Errorf("unsupported monitor database application/schema")
 	}
 	if err = db.QueryRow("PRAGMA quick_check").Scan(&integrity); err != nil || integrity != "ok" {
@@ -116,9 +118,14 @@ func openHistory(dir string) (*historyStore, error) {
 	if err = ensureAuditSchema(db, version); err != nil {
 		return nil, err
 	}
-	ok = true
 	result := &historyStore{db: db}
+	var source int64
+	if err = db.QueryRow("SELECT id FROM audit_sources WHERE slot=0").Scan(&source); err != nil && err != sql.ErrNoRows {
+		return nil, err
+	}
+	result.auditSource.Store(source)
 	result.auditDirty.Store(true)
+	ok = true
 	return result, nil
 }
 func (h *historyStore) close() error { return h.db.Close() }

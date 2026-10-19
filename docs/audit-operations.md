@@ -10,4 +10,4 @@
 
 当前启动和轮转在审计锁内重建全部保留文件，大目录的启动/轮转可能更慢；先在维护窗口测量实际目录。文件保留仍受 `auditMaxMB`/`auditBackups` 控制，已删除的历史不在在线索引中。长期保存按 [监控与归档](monitoring-operations.md)停机导出或用日志采集系统；归档恢复后会重新索引原日志。
 
-monitor.db 从 schema v1 事务升级为 v2，授权状态仍为 schema/backup v6；升级前保留配对停机备份。发布构建额外校验本地 remotedialer 并发补丁，见 [依赖说明](third-party-dependencies.md)。
+第十批独立交付时 monitor.db 从 v1 升至 v2；当前堆栈为 monitor schema v3、授权 schema/backup v10，见 [轮转与升级](audit-rotation-operations.md)；升级前保留配对停机备份。发布构建额外校验本地 remotedialer 并发补丁，见 [依赖说明](third-party-dependencies.md)。

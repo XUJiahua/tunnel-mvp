@@ -33,3 +33,5 @@ monitor.db schema v2 新增 audit_events 和 audit_index_state 以及组织/事�
 ## 验证
 
 超过旧尾部范围的日志与轮转文件查询、组合过滤、游标无重漏、轮转/重启失效、2 MiB 页预算、默认/命名组织隔离、无效/超长/非 UTF-8 行处理、索引故障后明确拒绝与原文件重建、schema v1 升级。浏览器从真实旧轮转文件查询 250 条并分页、按资源过滤、组织审计员不读取旧全局记录、重启重新查询及手机布局。整个堆栈继续双后端、真实 Keycloak/Agent、运维归档恢复回归。
+
+第十七批在 monitor schema v3 增加稳定来源 ID，健康轮转不再全量重建；启动/故障仍从 JSONL 修复，见 [增量轮转设计](audit-rotation.md)。当前授权 schema/backup 为 v10。

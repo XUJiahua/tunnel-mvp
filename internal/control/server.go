@@ -159,14 +159,30 @@ func (s *Server) audit(event, user, site, resource string, fields ...map[string]
 	defer s.auditMu.Unlock()
 	info, statErr := s.auditFile.Stat()
 	rotating := statErr == nil && info.Size() >= int64(s.cfg.AuditMaxMB)<<20
+	if statErr != nil || info.Size() != s.history.auditSize.Load() {
+		s.history.auditDirty.Store(true)
+	}
 	if err := s.rotateAudit(); err != nil {
 		s.logRotationError(err)
+		s.history.auditDirty.Store(true)
 		rotating = true
 	}
 	if rotating {
-		if err := s.rebuildAuditIndex(); err != nil {
-			s.stats.auditIndexErrors.Add(1)
-			slog.Error("audit index rebuild failed", "error", err)
+		var err error
+		if !s.history.auditDirty.Load() {
+			err = s.rotateAuditIndex()
+			if err != nil {
+				s.history.auditDirty.Store(true)
+				s.stats.auditIndexErrors.Add(1)
+				slog.Error("incremental audit rotation failed", "error", err)
+			}
+		}
+		if s.history.auditDirty.Load() {
+			err = s.rebuildAuditIndex()
+			if err != nil {
+				s.stats.auditIndexErrors.Add(1)
+				slog.Error("audit index rebuild failed", "error", err)
+			}
 		}
 	}
 	entry := map[string]any{"time": time.Now().UTC(), "event": event, "user": user, "siteID": site, "resourceID": resource}
@@ -186,6 +202,7 @@ func (s *Server) audit(event, user, site, resource string, fields ...map[string]
 		return
 	}
 	raw, _ := json.Marshal(entry)
+	s.history.auditSize.Add(int64(len(raw) + 1))
 	if err = s.history.indexAudit(raw); err != nil {
 		s.history.auditDirty.Store(true)
 		s.stats.auditIndexErrors.Add(1)

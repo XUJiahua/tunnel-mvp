@@ -1,6 +1,12 @@
 import { test, expect, type Page } from "@playwright/test";
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from "node:fs";
+import {
+  mkdtempSync,
+  writeFileSync,
+  rmSync,
+  mkdirSync,
+  existsSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 const root = resolve(process.cwd(), ".."),
@@ -58,8 +64,18 @@ test.beforeAll(async () => {
     ).join("\n") + "\n";
   writeFileSync(resolve(dir, "data/audit.jsonl.1"), events);
   writeFileSync(
+    resolve(dir, "data/audit.jsonl"),
+    (
+      JSON.stringify({
+        event: "rotation_seed",
+        padding: "x".repeat(64 << 10),
+      }) + "\n"
+    ).repeat(17),
+  );
+  writeFileSync(
     resolve(dir, "server.json"),
     JSON.stringify({
+      auditMaxMB: 1,
       listen: "127.0.0.1:26880",
       publicURL: url,
       accessURL: "http://apps.localhost:26880",
@@ -80,6 +96,7 @@ test("retained audit search, pagination, scoped privacy and restart cursor inval
   browser,
 }) => {
   await login(page, "admin", password);
+  expect(existsSync(resolve(dir, "data/audit.jsonl.2"))).toBe(true);
   await page.getByRole("button", { name: "审计日志", exact: true }).click();
   await page.getByLabel("事件类型", { exact: true }).fill("historical_event");
   await page.getByLabel("操作者", { exact: true }).fill("retired-operator");

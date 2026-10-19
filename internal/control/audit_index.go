@@ -29,15 +29,37 @@ var auditSchema = []string{
 	`INSERT INTO audit_index_state VALUES(1,'',0,0)`,
 }
 
+var auditSchemaV3 = []string{
+	`CREATE TABLE audit_sources(id INTEGER PRIMARY KEY,slot INTEGER NOT NULL UNIQUE,skipped INTEGER NOT NULL DEFAULT 0)`,
+	`INSERT INTO audit_sources(id,slot,skipped) VALUES(1,0,0)`,
+	`CREATE TABLE audit_events_v3 (id INTEGER PRIMARY KEY,organization_id TEXT,occurred_at TEXT NOT NULL,event TEXT NOT NULL,username TEXT NOT NULL,site_id TEXT NOT NULL,resource_id TEXT NOT NULL,payload TEXT NOT NULL CHECK(json_valid(payload)),source_id INTEGER NOT NULL REFERENCES audit_sources(id))`,
+	`INSERT INTO audit_events_v3 SELECT id,organization_id,occurred_at,event,username,site_id,resource_id,payload,1 FROM audit_events`,
+	`DROP TABLE audit_events`,
+	`ALTER TABLE audit_events_v3 RENAME TO audit_events`,
+	`CREATE INDEX audit_org_id ON audit_events(organization_id,id DESC)`,
+	`CREATE INDEX audit_event_id ON audit_events(event,id DESC)`,
+	`CREATE INDEX audit_user_id ON audit_events(username,id DESC)`,
+	`CREATE INDEX audit_site_id ON audit_events(site_id,id DESC)`,
+	`CREATE INDEX audit_resource_id ON audit_events(resource_id,id DESC)`,
+	`CREATE INDEX audit_time_id ON audit_events(occurred_at,id DESC)`,
+	`CREATE INDEX audit_source_id ON audit_events(source_id)`,
+}
+
 func ensureAuditSchema(db *sql.DB, version int) error {
-	if version == 1 {
+	if version < 3 {
 		tx, err := db.Begin()
 		if err != nil {
 			return err
 		}
 		defer tx.Rollback()
-		for _, statement := range append(append([]string{}, auditSchema...), "PRAGMA user_version=2") {
-			if _, err = tx.Exec(statement); err != nil {
+		statements := []string{}
+		if version == 1 {
+			statements = append(statements, auditSchema...)
+		}
+		statements = append(statements, auditSchemaV3...)
+		statements = append(statements, "PRAGMA user_version=3")
+		for _, q := range statements {
+			if _, err = tx.Exec(q); err != nil {
 				return err
 			}
 		}
@@ -45,13 +67,20 @@ func ensureAuditSchema(db *sql.DB, version int) error {
 			return err
 		}
 	}
-	rows, err := db.Query("SELECT organization_id,occurred_at,event,username,site_id,resource_id,payload FROM audit_events LIMIT 0")
+	rows, err := db.Query("SELECT organization_id,occurred_at,event,username,site_id,resource_id,payload,source_id FROM audit_events LIMIT 0")
 	if err != nil {
 		return err
 	}
 	rows.Close()
 	var epoch string
-	return db.QueryRow("SELECT epoch FROM audit_index_state WHERE singleton=1").Scan(&epoch)
+	if err = db.QueryRow("SELECT epoch FROM audit_index_state WHERE singleton=1").Scan(&epoch); err != nil {
+		return err
+	}
+	rows, err = db.Query("SELECT id,slot,skipped FROM audit_sources LIMIT 0")
+	if rows != nil {
+		rows.Close()
+	}
+	return err
 }
 func auditValues(raw []byte) ([]any, bool) {
 	var entry map[string]any
@@ -77,14 +106,14 @@ func auditValues(raw []byte) ([]any, bool) {
 	return []any{org, at, get("event"), get("user"), get("siteID"), get("resourceID"), string(raw)}, true
 }
 
-const insertAuditSQL = "INSERT INTO audit_events(organization_id,occurred_at,event,username,site_id,resource_id,payload) VALUES(?,?,?,?,?,?,?)"
+const insertAuditSQL = "INSERT INTO audit_events(organization_id,occurred_at,event,username,site_id,resource_id,payload,source_id) VALUES(?,?,?,?,?,?,?,?)"
 
 func (h *historyStore) indexAudit(raw []byte) error {
 	values, valid := auditValues(raw)
-	if !valid {
-		return fmt.Errorf("invalid audit record")
+	if !valid || len(raw) >= 128<<10 {
+		return fmt.Errorf("invalid or oversized audit record")
 	}
-	_, err := h.db.Exec(insertAuditSQL, values...)
+	_, err := h.db.Exec(insertAuditSQL, append(values, h.auditSource.Load())...)
 	if err != nil {
 		h.auditDirty.Store(true)
 	}
@@ -104,12 +133,16 @@ func (s *Server) rebuildAuditIndex() error {
 	if _, err = tx.Exec("DELETE FROM audit_events"); err != nil {
 		return err
 	}
+	if _, err = tx.Exec("DELETE FROM audit_sources"); err != nil {
+		return err
+	}
 	statement, err := tx.Prepare(insertAuditSQL)
 	if err != nil {
 		return err
 	}
 	defer statement.Close()
 	files, skipped := 0, 0
+	var activeSource, activeSize int64
 	names := []string{}
 	for i := s.cfg.AuditBackups; i >= 1; i-- {
 		names = append(names, fmt.Sprintf("audit.jsonl.%d", i))
@@ -132,6 +165,25 @@ func (s *Server) rebuildAuditIndex() error {
 			return e
 		}
 		files++
+		slot := 0
+		if name != "audit.jsonl" {
+			slot, _ = strconv.Atoi(strings.TrimPrefix(name, "audit.jsonl."))
+		}
+		result, e := tx.Exec("INSERT INTO audit_sources(slot,skipped) VALUES(?,0)", slot)
+		if e != nil {
+			f.Close()
+			return e
+		}
+		sourceID, e := result.LastInsertId()
+		if e != nil {
+			f.Close()
+			return e
+		}
+		if slot == 0 {
+			activeSource = sourceID
+			activeSize = info.Size()
+		}
+		beforeSkipped := skipped
 		reader := bufio.NewReaderSize(f, 128<<10)
 		for {
 			line, e := reader.ReadSlice('\n')
@@ -155,7 +207,7 @@ func (s *Server) rebuildAuditIndex() error {
 			}
 			if len(bytes.TrimSpace(line)) > 0 {
 				if values, valid := auditValues(bytes.TrimSpace(line)); valid {
-					if _, e = statement.Exec(values...); e != nil {
+					if _, e = statement.Exec(append(values, sourceID)...); e != nil {
 						f.Close()
 						return e
 					}
@@ -168,6 +220,12 @@ func (s *Server) rebuildAuditIndex() error {
 			}
 		}
 		f.Close()
+		if _, err = tx.Exec("UPDATE audit_sources SET skipped=? WHERE id=?", skipped-beforeSkipped, sourceID); err != nil {
+			return err
+		}
+	}
+	if activeSource == 0 {
+		return fmt.Errorf("active audit source missing")
 	}
 	if _, err = tx.Exec("UPDATE audit_index_state SET epoch=?,file_count=?,skipped=? WHERE singleton=1", randomID(), files, skipped); err != nil {
 		return err
@@ -175,6 +233,8 @@ func (s *Server) rebuildAuditIndex() error {
 	if err = tx.Commit(); err != nil {
 		return err
 	}
+	s.history.auditSource.Store(activeSource)
+	s.history.auditSize.Store(activeSize)
 	s.history.auditDirty.Store(false)
 	return nil
 }
@@ -283,4 +343,44 @@ func parseAuditCursor(raw string) (string, int64, error) {
 		return "", 0, fmt.Errorf("invalid audit cursor")
 	}
 	return parts[0], id, nil
+}
+
+// Filesystem rotation has completed. Retained source IDs and event IDs stay
+// stable; only the expired source's rows are deleted. Epoch still changes so
+// callers explicitly restart a page sequence across retention boundaries.
+func (s *Server) rotateAuditIndex() error {
+	tx, err := s.history.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err = tx.Exec("DELETE FROM audit_events WHERE source_id IN (SELECT id FROM audit_sources WHERE slot>=?)", s.cfg.AuditBackups); err != nil {
+		return err
+	}
+	if _, err = tx.Exec("DELETE FROM audit_sources WHERE slot>=?", s.cfg.AuditBackups); err != nil {
+		return err
+	}
+	if _, err = tx.Exec("UPDATE audit_sources SET slot=-slot-1"); err != nil {
+		return err
+	}
+	if _, err = tx.Exec("UPDATE audit_sources SET slot=-slot"); err != nil {
+		return err
+	}
+	result, err := tx.Exec("INSERT INTO audit_sources(slot,skipped) VALUES(0,0)")
+	if err != nil {
+		return err
+	}
+	id, err := result.LastInsertId()
+	if err != nil {
+		return err
+	}
+	if _, err = tx.Exec("UPDATE audit_index_state SET epoch=?,file_count=(SELECT count(*) FROM audit_sources),skipped=(SELECT coalesce(sum(skipped),0) FROM audit_sources) WHERE singleton=1", randomID()); err != nil {
+		return err
+	}
+	if err = tx.Commit(); err != nil {
+		return err
+	}
+	s.history.auditSource.Store(id)
+	s.history.auditSize.Store(0)
+	return nil
 }

@@ -359,3 +359,5 @@ Agent 签名升级：[设计](docs/design/agent-updates.md) · [发布、主机�
 组织角色委派：[设计](docs/design/delegated-roles.md) · [操作](docs/delegated-role-operations.md)。
 
 SQLite 增量持久化：[设计](docs/design/incremental-sqlite.md) · [操作与写入基准](docs/sqlite-incremental-operations.md)。
+
+审计增量轮转：[设计](docs/design/audit-rotation.md) · [升级与故障操作](docs/audit-rotation-operations.md)。

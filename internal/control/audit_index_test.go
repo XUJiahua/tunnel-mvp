@@ -134,7 +134,7 @@ func TestAuditIndexV1Migration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, sql := range []string{"DROP TABLE audit_events", "DROP TABLE audit_index_state", "PRAGMA user_version=1"} {
+	for _, sql := range []string{"DROP TABLE audit_events", "DROP TABLE audit_sources", "DROP TABLE audit_index_state", "PRAGMA user_version=1"} {
 		if _, err = h.db.Exec(sql); err != nil {
 			t.Fatal(err)
 		}
@@ -147,7 +147,7 @@ func TestAuditIndexV1Migration(t *testing.T) {
 	defer h.close()
 	var version int
 	h.db.QueryRow("PRAGMA user_version").Scan(&version)
-	if version != 2 {
+	if version != 3 {
 		t.Fatal("monitor schema not upgraded")
 	}
 	raw, _ := json.Marshal(map[string]any{"time": time.Now().UTC(), "event": "upgrade"})
