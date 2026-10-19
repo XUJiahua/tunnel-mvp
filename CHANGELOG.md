@@ -2,6 +2,8 @@
 
 ## 未发布
 
+- 发布打包暂采用 GoReleaser 串行执行，规避复查中重复出现的并行 gzip 截断，并保留完整解压/CRC/SHA-256 校验。
+
 - 新增可选 OIDC 控制台登录、PKCE/state/nonce 与签名验证、显式身份绑定、OIDC 专用成员及账号禁用/启用。
 - 禁用或身份变更即时撤销所有本地会话和 HTTP/WS/SSE；保留本地恢复管理员，不自动信任 IdP 角色。
 - SQLite schema v2 事务升级、backup v2 与旧 v1 读取兼容；新增 OIDC 设计、Keycloak 操作示例和双后端浏览器验收。

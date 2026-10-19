@@ -21,5 +21,5 @@ clean:
 release-check:
 	$(GORELEASER) check
 release-snapshot:
-	$(GORELEASER) release --snapshot --clean --parallelism 2
+	$(GORELEASER) release --snapshot --clean --parallelism 1
 	python3 scripts/verify-release.py dist

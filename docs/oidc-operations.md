@@ -124,3 +124,5 @@ Keycloak 采用固定示例版本 `26.8.0`，遵循[官方容器入门](https://
 | IdP 注销后仍能访问 | 本地会话独立，使用控制台禁用即时收回，核对到期上限 |
 
 完成一次绑定成功、未绑定拒绝、同名/邮箱不提权、单应用授权、退出、禁用/启用、重新绑定和 Server 重启后的重新登录验收。自动检查命令为 `make test`，以及构建后在 `web` 中分别运行普通和 `TUNNEL_TEST_STORAGE=sqlite` 的 `pnpm run test:e2e`。
+
+发布前本地执行 `make release-snapshot`，检查六平台 archive/checksum/文档完整性。本批复查中并行度 2 的快照重复出现 gzip 截断，暂将本地与发布流程的 GoReleaser 并行度降为 1；保留全文件解压、CRC 与 SHA-256 检查，不以重试代替校验。该措施不改变 Server 请求并发。

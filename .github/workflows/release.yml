@@ -72,7 +72,8 @@ jobs:
           RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
         run: bash scripts/prepare-release.sh
       - name: Cross-compile and upload packages to a draft Release
-        run: goreleaser release --clean --parallelism 2
+        # Parallel snapshots produced truncated tar.gz; serialize and retain integrity gates.
+        run: goreleaser release --clean --parallelism 1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NEXT_TELEMETRY_DISABLED: '1'
