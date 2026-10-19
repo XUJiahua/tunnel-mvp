@@ -122,3 +122,24 @@ func TestOperationsConfiguration(t *testing.T) {
 		t.Fatalf("watcher should require config: %v", err)
 	}
 }
+
+func TestOIDCConfigPrecedenceAndSecretRedaction(t *testing.T) {
+	t.Setenv("TUNNEL_OIDC_ISSUER", "https://sso.example/realms/test")
+	t.Setenv("TUNNEL_OIDC_CLIENT_ID", "environment-client")
+	t.Setenv("TUNNEL_OIDC_SESSION_MINUTES", "20")
+	t.Setenv("TUNNEL_OIDC_CLIENT_SECRET", "private-secret-never-printed")
+	out, err := execute("server", "--oidc-client-id", "flag-client", "--check-config")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out, "private-secret") || strings.Contains(out, "clientSecret") || !strings.Contains(out, "flag-client") || !strings.Contains(out, "https://sso.example/realms/test") || !strings.Contains(out, `"sessionMinutes": 20`) {
+		t.Fatal("bad OIDC effective config", out)
+	}
+	path := filepath.Join(t.TempDir(), "bad.json")
+	if err = os.WriteFile(path, []byte(`{"oidc":{"issuer":"https://sso.example","clientID":"client","clientSecret":"do-not-accept"}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = execute("server", "--config", path, "--check-config"); err == nil {
+		t.Fatal("config-file secret accepted")
+	}
+}

@@ -2,6 +2,8 @@
 
 本手册适用于包含存储批次代码的构建。默认后端仍是 JSON；当前 Release 中的旧二进制不一定包含这些命令。先执行 `tunnel storage --help` 确认。
 
+第三批身份功能使用 SQLite schema v2、backup v2，并继续读取旧 backup v1。已有 SQLite v1 首次被 Server、inspect 或 export 打开时会事务升级；**先用旧二进制导出并备份停机目录，再换程序**。失败不会留下部分 schema。回滚须使用升级前备份。详见 [OIDC 升级手册](oidc-operations.md)。
+
 ## 1. 选择后端
 
 | 场景 | 操作 |
@@ -57,7 +59,7 @@ mkdir -p backups
 
 `-c` 读取普通 Server JSON/YAML，storage 与 dataDir 参数仍可覆盖。命令成功后输出后端、schema 版本和资源数量，不把完整状态打印到终端。输出文件必须是新文件；同名文件已存在会失败。
 
-备份文件权限 0600，包含密码散列、Agent 令牌散列和内部应用地址；不加密，也不包含明文 Agent 令牌。请单独安全保存 Server/Agent 配置、凭据环境、TLS/CA 和审计历史。仓库默认忽略 `backups/`，不要改名后提交到公开仓库。
+备份文件权限 0600，包含密码散列、Agent 令牌散列、OIDC 身份/禁用状态和内部应用地址；不加密，也不包含明文 Agent 令牌。请单独安全保存 Server/Agent 配置、凭据环境、TLS/CA 和审计历史。仓库默认忽略 `backups/`，不要改名后提交到公开仓库。
 
 JSON/SQLite 状态文件均可在停机后随整个数据目录备份。可移植 export 的优势是跨后端恢复及格式/校验和检查；不能替代审计日志归档。
 

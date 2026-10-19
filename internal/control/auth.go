@@ -96,7 +96,7 @@ func (s *Server) currentUser(r *http.Request) (User, string, bool) {
 		return User{}, "", false
 	}
 	u, ok := s.store.user(sess.UserID)
-	return u, key, ok
+	return u, key, ok && !u.Disabled
 }
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	s.accessMu.RLock()
@@ -134,18 +134,13 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		hash = s.dummyHash
 	}
 	err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(body.Password))
-	if err != nil || found.ID == "" {
+	if err != nil || found.ID == "" || found.Disabled || found.PasswordHash == "" {
 		s.audit("login_failed", body.Username, "", "")
 		fail(w, 401, "invalid username or password")
 		return
 	}
-	token := randomID()
-	s.auth.mu.Lock()
-	s.auth.sessions[digest(token)] = session{found.ID, time.Now().Add(12 * time.Hour)}
-	s.auth.mu.Unlock()
-	http.SetCookie(w, &http.Cookie{Name: consoleCookie, Value: token, Path: "/", HttpOnly: true, Secure: s.secure, SameSite: http.SameSiteLaxMode, MaxAge: 43200})
-	found.PasswordHash = ""
+	s.issueSession(w, found, time.Now().Add(12*time.Hour))
 	s.audit("login", found.Username, "", "")
-	jsonOut(w, 200, found)
+	jsonOut(w, 200, publicUser(found))
 }
 func constantEqual(a, b string) bool { return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1 }

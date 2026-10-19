@@ -3,6 +3,7 @@ module github.com/XUJiahua/tunnel-mvp
 go 1.27.0
 
 require (
+	github.com/coreos/go-oidc/v3 v3.19.0
 	github.com/gofrs/flock v0.12.1
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674
 	github.com/rancher/remotedialer v0.6.2-0.20261014155149-1e594259f9fc
@@ -11,6 +12,7 @@ require (
 	github.com/spf13/pflag v1.0.10
 	github.com/spf13/viper v1.21.0
 	golang.org/x/crypto v0.58.0
+	golang.org/x/oauth2 v0.36.0
 	modernc.org/sqlite v1.60.1
 )
 
@@ -19,6 +21,7 @@ require (
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
+	github.com/go-jose/go-jose/v4 v4.1.4 // indirect
 	github.com/go-viper/mapstructure/v2 v2.4.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect

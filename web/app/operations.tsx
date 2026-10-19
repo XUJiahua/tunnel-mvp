@@ -10,12 +10,15 @@ type User = {
   username: string;
   siteIDs: string[];
   serviceIDs?: string[];
+  identity?: { issuer: string; subject: string };
+  passwordLogin?: boolean;
 };
 export type Editor =
   | { kind: "site"; site: Site }
   | { kind: "service"; service: Service }
   | { kind: "grants"; user: User }
   | { kind: "reset"; user: User }
+  | { kind: "identity"; user: User }
   | { kind: "password" };
 
 export function Grants({
@@ -69,12 +72,14 @@ export function Grants({
 
 export function ResourceEditor({
   editor,
+  oidcIssuer,
   sites,
   services,
   onClose,
   onSaved,
 }: {
   editor: Editor;
+  oidcIssuer: string;
   sites: Site[];
   services: Service[];
   onClose: () => void;
@@ -93,9 +98,11 @@ export function ResourceEditor({
         ? "编辑应用"
         : editor.kind === "grants"
           ? `编辑权限 · ${editor.user.username}`
-          : editor.kind === "reset"
-            ? `重置密码 · ${editor.user.username}`
-            : "修改我的密码";
+          : editor.kind === "identity"
+            ? `身份绑定 · ${editor.user.username}`
+            : editor.kind === "reset"
+              ? `重置密码 · ${editor.user.username}`
+              : "修改我的密码";
   async function save(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setBusy(true);
@@ -115,6 +122,10 @@ export function ResourceEditor({
         await api(`/users/${editor.user.id}`, "PATCH", {
           siteIDs: data.getAll("siteIDs"),
           serviceIDs: data.getAll("serviceIDs"),
+        });
+      if (editor.kind === "identity")
+        await api(`/users/${editor.user.id}/identity`, "PATCH", {
+          subject: data.get("subject"),
         });
       if (editor.kind === "reset")
         await api(`/users/${editor.user.id}/password`, "POST", {
@@ -182,6 +193,32 @@ export function ResourceEditor({
             <Grants sites={sites} services={services} user={editor.user} />
             <p className="form-tip">
               收回权限立即关闭受影响的 WebSocket、SSE 和其他代理请求。
+            </p>
+          </>
+        )}
+        {editor.kind === "identity" && (
+          <>
+            <p className="form-tip">
+              修改绑定会立即撤销该成员所有会话和应用连接。邮箱或显示名不会参与身份匹配。
+            </p>
+            <p className="muted small">
+              当前 Issuer：{editor.user.identity?.issuer || "未绑定"}
+              <br />
+              目标 Issuer：{oidcIssuer || "未配置"}
+            </p>
+            <label className="field">
+              <span>OIDC Subject</span>
+              <input
+                name="subject"
+                defaultValue={editor.user.identity?.subject || ""}
+                maxLength={255}
+                required={!editor.user.passwordLogin}
+                autoComplete="off"
+              />
+            </label>
+            <p className="form-tip">
+              本地密码成员可清空 Subject 解除绑定；OIDC
+              专用成员请通过禁用或删除收回访问。
             </p>
           </>
         )}

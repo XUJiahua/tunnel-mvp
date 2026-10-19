@@ -11,7 +11,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const SchemaVersion = 1
+const SchemaVersion = 2
 const applicationID = 0x54554e4c // TUNL
 
 type sqliteBackend struct{ db *sql.DB }
@@ -41,12 +41,13 @@ func connectSQLite(path string) (*sqliteBackend, error) {
 }
 
 var schema = []string{
-	`CREATE TABLE users (id TEXT PRIMARY KEY, position INTEGER NOT NULL UNIQUE, username TEXT NOT NULL UNIQUE, password_hash TEXT NOT NULL, role TEXT NOT NULL CHECK(role IN ('admin','viewer')))`,
+	`CREATE TABLE users (id TEXT PRIMARY KEY, position INTEGER NOT NULL UNIQUE, username TEXT NOT NULL UNIQUE, password_hash TEXT NOT NULL, role TEXT NOT NULL CHECK(role IN ('admin','viewer')), disabled INTEGER NOT NULL DEFAULT 0 CHECK(disabled IN (0,1)), oidc_issuer TEXT NOT NULL DEFAULT '', oidc_subject TEXT NOT NULL DEFAULT '')`,
 	`CREATE TABLE sites (id TEXT PRIMARY KEY, position INTEGER NOT NULL UNIQUE, name TEXT NOT NULL, token_hash TEXT NOT NULL CHECK(length(token_hash)=64), created_at TEXT NOT NULL)`,
 	`CREATE TABLE services (id TEXT PRIMARY KEY, position INTEGER NOT NULL UNIQUE, name TEXT NOT NULL, site_id TEXT NOT NULL REFERENCES sites(id), url TEXT NOT NULL)`,
 	`CREATE TABLE user_sites (user_id TEXT NOT NULL REFERENCES users(id), site_id TEXT NOT NULL REFERENCES sites(id), position INTEGER NOT NULL, PRIMARY KEY(user_id,site_id), UNIQUE(user_id,position))`,
 	`CREATE TABLE user_services (user_id TEXT NOT NULL REFERENCES users(id), service_id TEXT NOT NULL REFERENCES services(id), position INTEGER NOT NULL, PRIMARY KEY(user_id,service_id), UNIQUE(user_id,position))`,
 	`CREATE INDEX services_site ON services(site_id)`,
+	`CREATE UNIQUE INDEX users_identity ON users(oidc_issuer,oidc_subject) WHERE oidc_issuer != ''`,
 }
 
 func createSQLite(path string, s State) (*sqliteBackend, error) {
@@ -106,7 +107,7 @@ func openSQLite(path string) (backend, State, error) {
 	if err = b.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
 		return nil, State{}, err
 	}
-	if app != applicationID || version != SchemaVersion {
+	if app != applicationID || (version != 1 && version != SchemaVersion) {
 		return nil, State{}, fmt.Errorf("unsupported SQLite application/schema: app=%d version=%d (expected %d)", app, version, SchemaVersion)
 	}
 	var integrity string
@@ -128,6 +129,36 @@ func openSQLite(path string) (backend, State, error) {
 	}
 	if invalid {
 		return nil, State{}, fmt.Errorf("SQLite contains invalid foreign keys")
+	}
+	// The directory lock excludes other processes. Schema and domain validation
+	// must both succeed before committing this additive v1 -> v2 upgrade.
+	if version == 1 {
+		tx, err := b.db.Begin()
+		if err != nil {
+			return nil, State{}, err
+		}
+		defer tx.Rollback()
+		for _, sql := range []string{
+			"ALTER TABLE users ADD COLUMN disabled INTEGER NOT NULL DEFAULT 0 CHECK(disabled IN (0,1))",
+			"ALTER TABLE users ADD COLUMN oidc_issuer TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE users ADD COLUMN oidc_subject TEXT NOT NULL DEFAULT ''",
+			"CREATE UNIQUE INDEX users_identity ON users(oidc_issuer,oidc_subject) WHERE oidc_issuer != ''",
+			"PRAGMA user_version=2",
+		} {
+			if _, err = tx.Exec(sql); err != nil {
+				return nil, State{}, err
+			}
+		}
+		upgraded, err := loadSQLite(tx)
+		if err != nil {
+			return nil, State{}, err
+		}
+		if err = Validate(&upgraded); err != nil {
+			return nil, State{}, err
+		}
+		if err = tx.Commit(); err != nil {
+			return nil, State{}, err
+		}
 	}
 	s, err := b.load()
 	if err != nil {
@@ -155,7 +186,11 @@ func (b *sqliteBackend) save(s State) error {
 		}
 	}
 	for i, v := range s.Users {
-		if _, err = tx.Exec("INSERT INTO users VALUES(?,?,?,?,?)", v.ID, i, v.Username, v.PasswordHash, v.Role); err != nil {
+		issuer, subject := "", ""
+		if v.Identity != nil {
+			issuer, subject = v.Identity.Issuer, v.Identity.Subject
+		}
+		if _, err = tx.Exec("INSERT INTO users VALUES(?,?,?,?,?,?,?,?)", v.ID, i, v.Username, v.PasswordHash, v.Role, v.Disabled, issuer, subject); err != nil {
 			return err
 		}
 	}
@@ -183,19 +218,29 @@ func (b *sqliteBackend) save(s State) error {
 	}
 	return tx.Commit()
 }
-func (b *sqliteBackend) load() (State, error) {
+func (b *sqliteBackend) load() (State, error) { return loadSQLite(b.db) }
+
+type sqlReader interface {
+	Query(string, ...any) (*sql.Rows, error)
+}
+
+func loadSQLite(reader sqlReader) (State, error) {
 	s := State{Users: []User{}, Sites: []Site{}, Services: []Service{}}
-	rows, err := b.db.Query("SELECT id,username,password_hash,role FROM users ORDER BY position")
+	rows, err := reader.Query("SELECT id,username,password_hash,role,disabled,oidc_issuer,oidc_subject FROM users ORDER BY position")
 	if err != nil {
 		return s, err
 	}
 	for rows.Next() {
 		var u User
+		var issuer, subject string
 		u.SiteIDs = []string{}
 		u.ServiceIDs = []string{}
-		if err = rows.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role); err != nil {
+		if err = rows.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &u.Disabled, &issuer, &subject); err != nil {
 			_ = rows.Close()
 			return s, err
+		}
+		if issuer != "" || subject != "" {
+			u.Identity = &Identity{issuer, subject}
 		}
 		s.Users = append(s.Users, u)
 	}
@@ -204,7 +249,7 @@ func (b *sqliteBackend) load() (State, error) {
 	if err != nil {
 		return s, err
 	}
-	rows, err = b.db.Query("SELECT id,name,token_hash,created_at FROM sites ORDER BY position")
+	rows, err = reader.Query("SELECT id,name,token_hash,created_at FROM sites ORDER BY position")
 	if err != nil {
 		return s, err
 	}
@@ -227,7 +272,7 @@ func (b *sqliteBackend) load() (State, error) {
 	if err != nil {
 		return s, err
 	}
-	rows, err = b.db.Query("SELECT id,name,site_id,url FROM services ORDER BY position")
+	rows, err = reader.Query("SELECT id,name,site_id,url FROM services ORDER BY position")
 	if err != nil {
 		return s, err
 	}
@@ -253,7 +298,7 @@ func (b *sqliteBackend) load() (State, error) {
 		if table == "user_services" {
 			column = "service_id"
 		}
-		rows, err = b.db.Query("SELECT user_id," + column + " FROM " + table + " ORDER BY user_id,position")
+		rows, err = reader.Query("SELECT user_id," + column + " FROM " + table + " ORDER BY user_id,position")
 		if err != nil {
 			return s, err
 		}

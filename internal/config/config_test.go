@@ -28,3 +28,27 @@ func TestConsoleOutsideApplicationNamespace(t *testing.T) {
 		}
 	}
 }
+
+func TestOIDCConfig(t *testing.T) {
+	for _, tc := range []struct {
+		issuer, client, public string
+		minutes                int
+		valid                  bool
+	}{
+		{"https://idp.example/realms/tunnel", "console", "https://console.example", 0, true},
+		{"http://127.0.0.1:8081/realms/dev", "console", "http://localhost:8080", 60, true},
+		{"http://idp.example", "console", "https://console.example", 0, false},
+		{"https://idp.example", "", "https://console.example", 0, false},
+		{"https://idp.example", "console", "http://console.example", 0, false},
+		{"https://idp.example?x=1", "console", "https://console.example", 0, false},
+		{"https://idp.example", "console", "https://console.example", 721, false},
+	} {
+		cfg := Server{PublicURL: tc.public, AccessURL: "https://apps.example", OIDC: OIDC{Issuer: tc.issuer, ClientID: tc.client, SessionMinutes: tc.minutes}}
+		if len(tc.public) > 5 && tc.public[:5] == "http:" {
+			cfg.AccessURL = "http://apps.localhost:8080"
+		}
+		if err := cfg.Validate(); (err == nil) != tc.valid {
+			t.Fatalf("%+v: %v", tc, err)
+		}
+	}
+}

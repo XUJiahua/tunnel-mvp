@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/url"
 	"regexp"
 	"strings"
@@ -15,13 +16,20 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
+type Identity struct {
+	Issuer  string `json:"issuer"`
+	Subject string `json:"subject"`
+}
+
 type User struct {
-	ID           string   `json:"id"`
-	Username     string   `json:"username"`
-	PasswordHash string   `json:"passwordHash,omitempty"`
-	Role         string   `json:"role"`
-	SiteIDs      []string `json:"siteIDs"`
-	ServiceIDs   []string `json:"serviceIDs"`
+	ID           string    `json:"id"`
+	Disabled     bool      `json:"disabled,omitempty"`
+	Identity     *Identity `json:"identity,omitempty"`
+	Username     string    `json:"username"`
+	PasswordHash string    `json:"passwordHash,omitempty"`
+	Role         string    `json:"role"`
+	SiteIDs      []string  `json:"siteIDs"`
+	ServiceIDs   []string  `json:"serviceIDs"`
 }
 type Site struct {
 	ID        string    `json:"id"`
@@ -93,15 +101,28 @@ func Validate(s *State) error {
 		services[v.ID] = true
 	}
 	admins := 0
+	identities := map[Identity]bool{}
 	for i := range s.Users {
 		v := &s.Users[i]
 		if !resourceID.MatchString(v.ID) || users[v.ID] || !validName(v.Username) || names[v.Username] || (v.Role != "admin" && v.Role != "viewer") {
 			return fmt.Errorf("invalid or duplicate user %q", v.ID)
 		}
-		if _, err := bcrypt.Cost([]byte(v.PasswordHash)); err != nil {
-			return fmt.Errorf("invalid password hash for user %q", v.ID)
+		if v.Identity != nil {
+			identity := *v.Identity
+			if err := ValidateIdentity(identity); err != nil || identities[identity] {
+				return fmt.Errorf("invalid or duplicate OIDC identity for user %q", v.ID)
+			}
+			identities[identity] = true
 		}
-		if v.Role == "admin" {
+		if v.PasswordHash == "" && v.Identity == nil {
+			return fmt.Errorf("user %q has no login method", v.ID)
+		}
+		if v.PasswordHash != "" {
+			if _, err := bcrypt.Cost([]byte(v.PasswordHash)); err != nil {
+				return fmt.Errorf("invalid password hash for user %q", v.ID)
+			}
+		}
+		if v.Role == "admin" && !v.Disabled && v.PasswordHash != "" {
 			admins++
 		}
 		users[v.ID] = true
@@ -120,7 +141,17 @@ func Validate(s *State) error {
 		}
 	}
 	if admins == 0 {
-		return fmt.Errorf("state must contain at least one administrator")
+		return fmt.Errorf("state must contain at least one enabled local-password administrator")
+	}
+	return nil
+}
+
+// Issuers are exact identifiers, not normalized origins. Subjects are opaque and
+// case-sensitive. Never trim/alias them or substitute an email/display name.
+func ValidateIdentity(v Identity) error {
+	u, err := url.Parse(v.Issuer)
+	if err != nil || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || (u.Scheme != "https" && !(u.Scheme == "http" && (u.Hostname() == "localhost" || net.ParseIP(u.Hostname()).IsLoopback()))) || len(v.Issuer) > 2048 || v.Subject == "" || len(v.Subject) > 255 || strings.TrimSpace(v.Subject) != v.Subject {
+		return fmt.Errorf("valid HTTPS issuer and nonempty subject required (HTTP allowed only on loopback)")
 	}
 	return nil
 }

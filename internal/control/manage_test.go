@@ -161,7 +161,7 @@ func TestPasswordChangeAndReset(t *testing.T) {
 }
 
 func TestLiveWebSocketAndSSERevocation(t *testing.T) {
-	for _, action := range []string{"logout", "password", "grants", "delete", "target", "expiry"} {
+	for _, action := range []string{"logout", "password", "grants", "delete", "target", "expiry", "disable", "identity"} {
 		t.Run(action, func(t *testing.T) {
 			f := setup(t)
 			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -225,6 +225,12 @@ func TestLiveWebSocketAndSSERevocation(t *testing.T) {
 			reader.ReadString('\n')
 			var res *http.Response
 			switch action {
+			case "disable":
+				res, _ = f.request(t, "PATCH", "/api/users/"+u.ID+"/disabled", map[string]bool{"disabled": true}, f.cookie, "")
+			case "identity":
+				f.s.cfg.OIDC.Issuer = "https://idp.example"
+				f.s.oidc = &oidcLogin{}
+				res, _ = f.request(t, "PATCH", "/api/users/"+u.ID+"/identity", map[string]string{"subject": "new-binding"}, f.cookie, "")
 			case "logout":
 				res, _ = f.request(t, "POST", "/api/logout", nil, login, "")
 			case "password":

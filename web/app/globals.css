@@ -1380,3 +1380,11 @@ td code {
   max-height: 240px;
   overflow: auto;
 }
+
+.oidc-login {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+  margin-top: 14px;
+}

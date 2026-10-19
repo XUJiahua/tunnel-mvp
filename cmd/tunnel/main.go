@@ -90,6 +90,9 @@ func newRootCommand() *cobra.Command {
 		defer s.Close()
 		return s.Run(cmd.Context())
 	}}
+	server.Flags().String("oidc-issuer", "", "OIDC issuer URL; HTTPS except loopback")
+	server.Flags().String("oidc-client-id", "", "OIDC client ID; secret uses TUNNEL_OIDC_CLIENT_SECRET only")
+	server.Flags().Int("oidc-session-minutes", 0, "Maximum OIDC local session duration (1–720 minutes)")
 	server.Flags().Int("probe-interval", 60, "Automatic HEAD probe interval in seconds; 0 disables")
 	server.Flags().Int("audit-max-mb", 20, "Audit file rotation size in MiB")
 	server.Flags().Int("audit-backups", 5, "Number of rotated audit files to retain")

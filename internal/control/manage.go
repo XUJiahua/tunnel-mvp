@@ -146,9 +146,8 @@ func (s *Server) updateUser(w http.ResponseWriter, r *http.Request, actor User) 
 		svc, ok := s.store.service(req.serviceID)
 		return req.userID == out.ID && (!ok || !canAccessService(out, svc))
 	})
-	out.PasswordHash = ""
 	s.audit("user_grants_updated", actor.Username, "", out.ID)
-	jsonOut(w, 200, out)
+	jsonOut(w, 200, publicUser(out))
 }
 func (s *Server) changePassword(w http.ResponseWriter, r *http.Request, actor User) {
 	var body struct {
@@ -189,6 +188,10 @@ func (s *Server) setPassword(w http.ResponseWriter, r *http.Request, actor User,
 	target, ok := s.store.user(id)
 	if !ok || (!verify && target.Role == "admin") {
 		fail(w, 404, "member not found")
+		return
+	}
+	if target.PasswordHash == "" {
+		fail(w, 400, "OIDC-only members manage passwords at their identity provider")
 		return
 	}
 	if verify && bcrypt.CompareHashAndPassword([]byte(target.PasswordHash), []byte(current)) != nil {

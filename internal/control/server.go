@@ -18,12 +18,14 @@ import (
 	"time"
 
 	"github.com/XUJiahua/tunnel-mvp/internal/config"
+	"github.com/XUJiahua/tunnel-mvp/internal/state"
 	"github.com/XUJiahua/tunnel-mvp/internal/web"
 	"github.com/rancher/remotedialer"
 	"golang.org/x/crypto/bcrypt"
 )
 
 type Server struct {
+	oidc             *oidcLogin
 	accessMu         sync.RWMutex
 	liveMu           sync.Mutex
 	live             map[string]liveRequest
@@ -80,6 +82,11 @@ func New(c config.Server, password string) (*Server, error) {
 		af.Close()
 		_ = st.Close()
 		return nil, fmt.Errorf("TUNNEL_METRICS_TOKEN must contain at least 32 bytes")
+	}
+	if err := s.configureOIDC(); err != nil {
+		af.Close()
+		_ = st.Close()
+		return nil, err
 	}
 	s.startBackground()
 	return s, nil
@@ -152,6 +159,11 @@ func (s *Server) Run(ctx context.Context) error {
 }
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/auth/options", s.authOptions)
+	mux.HandleFunc("GET /auth/oidc/start", s.beginOIDC)
+	mux.HandleFunc("GET /auth/oidc/callback", s.callbackOIDC)
+	mux.HandleFunc("PATCH /api/users/{id}/identity", s.require(true, s.updateIdentity))
+	mux.HandleFunc("PATCH /api/users/{id}/disabled", s.require(true, s.setDisabled))
 	mux.HandleFunc("POST /api/login", s.login)
 	mux.HandleFunc("POST /api/logout", s.logout)
 	mux.HandleFunc("POST /api/me/password", s.require(false, s.changePassword))
@@ -162,7 +174,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/status", s.require(false, s.status))
 	mux.HandleFunc("GET /api/audit", s.require(true, s.listAudit))
 	mux.HandleFunc("GET /api/metrics", s.require(true, s.metrics))
-	mux.HandleFunc("GET /api/me", s.require(false, func(w http.ResponseWriter, r *http.Request, u User) { u.PasswordHash = ""; jsonOut(w, 200, u) }))
+	mux.HandleFunc("GET /api/me", s.require(false, func(w http.ResponseWriter, r *http.Request, u User) { jsonOut(w, 200, publicUser(u)) }))
 	mux.HandleFunc("GET /api/sites", s.require(false, s.listSites))
 	mux.HandleFunc("POST /api/sites", s.require(true, s.createSite))
 	mux.HandleFunc("DELETE /api/sites/{id}", s.require(true, s.deleteSite))
@@ -482,31 +494,51 @@ func (s *Server) deleteService(w http.ResponseWriter, r *http.Request, u User) {
 	jsonOut(w, 200, map[string]bool{"ok": true})
 }
 func (s *Server) listUsers(w http.ResponseWriter, r *http.Request, u User) {
-	users := s.store.snapshot().Users
-	for i := range users {
-		users[i].PasswordHash = ""
+	users := []userView{}
+	for _, member := range s.store.snapshot().Users {
+		users = append(users, publicUser(member))
 	}
 	jsonOut(w, 200, users)
 }
 func (s *Server) createUser(w http.ResponseWriter, r *http.Request, u User) {
 	var b struct {
-		Username   string   `json:"username"`
-		Password   string   `json:"password"`
-		SiteIDs    []string `json:"siteIDs"`
-		ServiceIDs []string `json:"serviceIDs"`
+		Username    string   `json:"username"`
+		Password    string   `json:"password"`
+		OIDCSubject string   `json:"oidcSubject"`
+		SiteIDs     []string `json:"siteIDs"`
+		ServiceIDs  []string `json:"serviceIDs"`
 	}
 	if !decode(w, r, &b) {
 		return
 	}
 	b.Username = strings.TrimSpace(b.Username)
-	if b.Username == "" || len(b.Username) > 100 || len(b.Password) < 12 || len(b.Password) > 72 {
-		fail(w, 400, "username required; password must be 12–72 bytes")
+	if b.Username == "" || len(b.Username) > 100 {
+		fail(w, 400, "username must be 1–100 bytes")
 		return
 	}
-	h, err := bcrypt.GenerateFromPassword([]byte(b.Password), bcrypt.DefaultCost)
-	if err != nil {
-		fail(w, 400, "invalid password")
-		return
+	var hash string
+	var identity *state.Identity
+	if b.OIDCSubject != "" {
+		if s.oidc == nil || b.Password != "" {
+			fail(w, 400, "OIDC-only members require configured OIDC and no password")
+			return
+		}
+		identity = &state.Identity{Issuer: s.cfg.OIDC.Issuer, Subject: b.OIDCSubject}
+		if err := state.ValidateIdentity(*identity); err != nil {
+			fail(w, 400, err.Error())
+			return
+		}
+	} else {
+		if len(b.Password) < 12 || len(b.Password) > 72 {
+			fail(w, 400, "password must be 12–72 bytes")
+			return
+		}
+		h, err := bcrypt.GenerateFromPassword([]byte(b.Password), bcrypt.DefaultCost)
+		if err != nil {
+			fail(w, 400, "invalid password")
+			return
+		}
+		hash = string(h)
 	}
 	if b.SiteIDs == nil {
 		b.SiteIDs = []string{}
@@ -514,8 +546,8 @@ func (s *Server) createUser(w http.ResponseWriter, r *http.Request, u User) {
 	if b.ServiceIDs == nil {
 		b.ServiceIDs = []string{}
 	}
-	user := User{ID: randomID()[:16], Username: b.Username, PasswordHash: string(h), Role: "viewer", SiteIDs: b.SiteIDs, ServiceIDs: b.ServiceIDs}
-	err = s.store.update(func(st *State) error {
+	user := User{ID: randomID()[:16], Username: b.Username, PasswordHash: hash, Identity: identity, Role: "viewer", SiteIDs: b.SiteIDs, ServiceIDs: b.ServiceIDs}
+	err := s.store.update(func(st *State) error {
 		for _, v := range st.Users {
 			if v.Username == user.Username {
 				return fmt.Errorf("username exists")
@@ -531,9 +563,8 @@ func (s *Server) createUser(w http.ResponseWriter, r *http.Request, u User) {
 		fail(w, 400, err.Error())
 		return
 	}
-	user.PasswordHash = ""
 	s.audit("user_created", u.Username, "", user.ID)
-	jsonOut(w, 201, user)
+	jsonOut(w, 201, publicUser(user))
 }
 func (s *Server) deleteUser(w http.ResponseWriter, r *http.Request, u User) {
 	s.accessMu.Lock()

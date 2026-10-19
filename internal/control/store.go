@@ -69,6 +69,9 @@ func (s *Store) service(id string) (Service, bool) {
 	return Service{}, false
 }
 func canAccess(u User, siteID string) bool {
+	if u.Disabled {
+		return false
+	}
 	if u.Role == "admin" {
 		return true
 	}
@@ -83,6 +86,9 @@ func canAccess(u User, siteID string) bool {
 // Site grants cover all current and future applications in that site. Explicit
 // service grants are additive and never grant access to sibling applications.
 func canAccessService(u User, svc Service) bool {
+	if u.Disabled {
+		return false
+	}
 	if canAccess(u, svc.SiteID) {
 		return true
 	}

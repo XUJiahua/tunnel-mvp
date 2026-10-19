@@ -2,8 +2,11 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"net/url"
 	"strings"
+
+	"github.com/XUJiahua/tunnel-mvp/internal/state"
 )
 
 type Logging struct {
@@ -29,7 +32,13 @@ func (l *Logging) Validate() error {
 	return nil
 }
 
+type OIDC struct {
+	Issuer         string `json:"issuer" mapstructure:"issuer"`
+	ClientID       string `json:"clientID" mapstructure:"clientID"`
+	SessionMinutes int    `json:"sessionMinutes" mapstructure:"sessionMinutes"`
+}
 type Server struct {
+	OIDC                 OIDC `json:"oidc" mapstructure:"oidc"`
 	Logging              `mapstructure:",squash"`
 	Listen               string `json:"listen" mapstructure:"listen"`
 	PublicURL            string `json:"publicURL" mapstructure:"publicURL"`
@@ -69,6 +78,20 @@ func Origin(raw string) (*url.URL, error) {
 	return u, nil
 }
 func (s *Server) Validate() error {
+	if s.OIDC.Issuer != "" || s.OIDC.ClientID != "" {
+		if err := state.ValidateIdentity(state.Identity{Issuer: s.OIDC.Issuer, Subject: "config"}); err != nil || strings.TrimSpace(s.OIDC.ClientID) == "" || len(s.OIDC.ClientID) > 255 {
+			return fmt.Errorf("OIDC requires a valid issuer and clientID")
+		}
+		if s.OIDC.SessionMinutes == 0 {
+			s.OIDC.SessionMinutes = 60
+		}
+		if s.OIDC.SessionMinutes < 1 || s.OIDC.SessionMinutes > 720 {
+			return fmt.Errorf("oidc.sessionMinutes must be 1–720")
+		}
+	} else if s.OIDC.SessionMinutes != 0 {
+		return fmt.Errorf("OIDC sessionMinutes requires issuer and clientID")
+	}
+
 	if s.Storage == "" {
 		s.Storage = "json"
 	}
@@ -103,6 +126,9 @@ func (s *Server) Validate() error {
 	}
 	if p.Scheme != a.Scheme {
 		return fmt.Errorf("console and access must use the same scheme")
+	}
+	if s.OIDC.Issuer != "" && p.Scheme != "https" && p.Hostname() != "localhost" && !net.ParseIP(p.Hostname()).IsLoopback() {
+		return fmt.Errorf("OIDC publicURL requires HTTPS (HTTP allowed only on loopback)")
 	}
 	s.PublicURL = p.String()
 	s.AccessURL = a.String()

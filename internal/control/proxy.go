@@ -59,7 +59,7 @@ func (s *Server) validGrant(g grant, serviceID string) (User, bool) {
 		return User{}, false
 	}
 	u, ok := s.store.user(sess.UserID)
-	return u, ok
+	return u, ok && !u.Disabled
 }
 func (s *Server) gateway(w http.ResponseWriter, r *http.Request) {
 	s.accessMu.RLock()

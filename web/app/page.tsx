@@ -18,6 +18,9 @@ type User = {
   role: "admin" | "viewer";
   siteIDs: string[];
   serviceIDs?: string[];
+  disabled?: boolean;
+  identity?: { issuer: string; subject: string };
+  passwordLogin?: boolean;
 };
 type Site = { id: string; name: string; online: boolean; createdAt: string };
 type Service = { id: string; name: string; siteID: string; url: string };
@@ -174,6 +177,8 @@ function Modal({
 }
 
 export default function Home() {
+  const [authOptions, setAuthOptions] = useState({ oidc: false, issuer: "" });
+  const [memberAuth, setMemberAuth] = useState("local");
   const [user, setUser] = useState<User | null>(null);
   const [booting, setBooting] = useState(true);
   const [connected, setConnected] = useState(true);
@@ -230,6 +235,15 @@ export default function Home() {
     setConnected(true);
   }, []);
   useEffect(() => {
+    api<typeof authOptions>("/auth/options")
+      .then(setAuthOptions)
+      .catch(() => {});
+    if (
+      new URLSearchParams(window.location.search).get("login_error") === "oidc"
+    ) {
+      setError("统一登录失败。请重试，或联系管理员核对身份绑定与账号状态。");
+      window.history.replaceState(null, "", "/");
+    }
     api<User>("/me")
       .then(async (u) => {
         setUser(u);
@@ -303,7 +317,8 @@ export default function Home() {
       if (dialog === "user")
         await api("/users", "POST", {
           username: data.get("username"),
-          password: data.get("password"),
+          password: data.get("password") || "",
+          oidcSubject: data.get("oidcSubject") || "",
           siteIDs: data.getAll("siteIDs"),
           serviceIDs: data.getAll("serviceIDs"),
         });
@@ -485,6 +500,11 @@ export default function Home() {
                 <Icon name="arrow" size={17} />
               </button>
             </form>
+            {authOptions.oidc && (
+              <a className="secondary full oidc-login" href="/auth/oidc/start">
+                使用统一身份登录
+              </a>
+            )}
             <p className="login-foot">
               <Icon name="shield" size={16} /> 仅可访问管理员授权的站点与应用
             </p>
@@ -737,15 +757,17 @@ export default function Home() {
             <span>{tab === "overview" ? "概览" : titles[tab][0]}</span>
           </div>
           <div className="topbar-status">
-            <button
-              className="subtle"
-              onClick={() => {
-                setError("");
-                setEditor({ kind: "password" });
-              }}
-            >
-              修改密码
-            </button>
+            {user.passwordLogin && (
+              <button
+                className="subtle"
+                onClick={() => {
+                  setError("");
+                  setEditor({ kind: "password" });
+                }}
+              >
+                修改密码
+              </button>
+            )}
             <span className={`dot ${connected ? "green" : ""}`} />
             {connected ? "控制面已连接" : "控制面连接中断"}
             <button
@@ -952,6 +974,14 @@ export default function Home() {
                       <tr key={u.id}>
                         <td>
                           <strong>{u.username}</strong>
+                          <div className="muted small">
+                            {u.disabled ? "已禁用" : "正常"} ·{" "}
+                            {u.identity
+                              ? u.passwordLogin
+                                ? "密码 + OIDC"
+                                : "OIDC"
+                              : "本地密码"}
+                          </div>
                         </td>
                         <td>
                           <span className="role-badge">
@@ -992,13 +1022,54 @@ export default function Home() {
                               >
                                 编辑权限
                               </button>
+                              {u.passwordLogin && (
+                                <button
+                                  className="subtle"
+                                  onClick={() =>
+                                    setEditor({ kind: "reset", user: u })
+                                  }
+                                >
+                                  重置密码
+                                </button>
+                              )}
+                              {(authOptions.oidc || u.identity) && (
+                                <button
+                                  className="subtle"
+                                  onClick={() =>
+                                    setEditor({ kind: "identity", user: u })
+                                  }
+                                >
+                                  身份绑定
+                                </button>
+                              )}
                               <button
                                 className="subtle"
-                                onClick={() =>
-                                  setEditor({ kind: "reset", user: u })
-                                }
+                                onClick={async () => {
+                                  if (
+                                    !u.disabled &&
+                                    !window.confirm(
+                                      `禁用「${u.username}」将立即撤销全部登录和应用连接。继续？`,
+                                    )
+                                  )
+                                    return;
+                                  try {
+                                    await api(
+                                      `/users/${u.id}/disabled`,
+                                      "PATCH",
+                                      { disabled: !u.disabled },
+                                    );
+                                    await refresh(user);
+                                    setNotice(
+                                      u.disabled
+                                        ? "已启用，请重新登录"
+                                        : "已禁用并撤销访问",
+                                    );
+                                  } catch (e) {
+                                    setError((e as Error).message);
+                                  }
+                                }}
                               >
-                                重置密码
+                                {u.disabled ? "启用账号" : "禁用账号"}
                               </button>
                             </>
                           )}
@@ -1029,6 +1100,7 @@ export default function Home() {
       {editor && (
         <ResourceEditor
           editor={editor}
+          oidcIssuer={authOptions.issuer}
           sites={sites}
           services={services}
           onClose={() => setEditor(null)}
@@ -1220,19 +1292,45 @@ export default function Home() {
                     autoComplete="off"
                   />
                 </Field>
-                <Field
-                  label="初始密码"
-                  hint="12–72 字节；请通过安全渠道交给成员。"
-                >
-                  <input
-                    name="password"
-                    type="password"
-                    minLength={12}
-                    maxLength={72}
-                    required
-                    autoComplete="new-password"
-                  />
-                </Field>
+                {authOptions.oidc && (
+                  <Field label="登录方式">
+                    <select
+                      value={memberAuth}
+                      onChange={(e) => setMemberAuth(e.target.value)}
+                    >
+                      <option value="local">本地密码</option>
+                      <option value="oidc">OIDC 统一登录</option>
+                    </select>
+                  </Field>
+                )}
+                {memberAuth === "oidc" && authOptions.oidc ? (
+                  <Field
+                    label="OIDC Subject"
+                    hint="从身份提供方获取 sub，精确区分大小写；不会按邮箱自动绑定。"
+                  >
+                    <input
+                      name="oidcSubject"
+                      required
+                      maxLength={255}
+                      autoComplete="off"
+                    />
+                    <small>Issuer：{authOptions.issuer}</small>
+                  </Field>
+                ) : (
+                  <Field
+                    label="初始密码"
+                    hint="12–72 字节；请通过安全渠道交给成员。"
+                  >
+                    <input
+                      name="password"
+                      type="password"
+                      minLength={12}
+                      maxLength={72}
+                      required
+                      autoComplete="new-password"
+                    />
+                  </Field>
+                )}
                 <Grants sites={sites} services={services} />
               </>
             )}

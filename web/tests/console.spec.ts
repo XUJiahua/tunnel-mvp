@@ -220,9 +220,7 @@ test("enroll site, open and log in to internal app, enforce viewer permissions",
   await page.getByLabel("初始密码").fill(password);
   await page.getByLabel("上海数据中心", { exact: true }).check();
   await page.getByRole("button", { name: "创建", exact: true }).click();
-  await expect(
-    page.getByRole("cell", { name: "reader", exact: true }),
-  ).toBeVisible();
+  await expect(page.getByText("reader", { exact: true })).toBeVisible();
 
   const viewerContext = await browser.newContext();
   const viewer = await viewerContext.newPage();
@@ -242,7 +240,7 @@ test("enroll site, open and log in to internal app, enforce viewer permissions",
   // Resource edits retain identity and application-only grants hide siblings.
   const memberRow = page
     .getByRole("row")
-    .filter({ has: page.getByRole("cell", { name: "reader", exact: true }) });
+    .filter({ has: page.getByText("reader", { exact: true }) });
   await memberRow
     .getByRole("button", { name: "编辑权限", exact: true })
     .click();

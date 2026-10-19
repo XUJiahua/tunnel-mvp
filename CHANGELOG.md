@@ -2,6 +2,10 @@
 
 ## 未发布
 
+- 新增可选 OIDC 控制台登录、PKCE/state/nonce 与签名验证、显式身份绑定、OIDC 专用成员及账号禁用/启用。
+- 禁用或身份变更即时撤销所有本地会话和 HTTP/WS/SSE；保留本地恢复管理员，不自动信任 IdP 角色。
+- SQLite schema v2 事务升级、backup v2 与旧 v1 读取兼容；新增 OIDC 设计、Keycloak 操作示例和双后端浏览器验收。
+
 - 新增 Repository 存储接口、可选纯 Go SQLite、schema/引用校验和数据目录独占进程锁。
 - 新增离线 `storage inspect/migrate/export/validate/restore`，保留 JSON 源文件，支持带校验和的跨后端恢复，拒绝覆盖和未知版本。
 - 真实控制面及浏览器验收覆盖 JSON/SQLite，CI 验证六个平台的无 CGO 编译，发布包包含完整设计和操作手册。

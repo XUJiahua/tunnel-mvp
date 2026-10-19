@@ -6,7 +6,7 @@
 
 在单控制面架构中补齐可持续使用的管理能力：直接编辑资源、修改密码、应用授权、立即撤销长连接、Agent 本地 ACL 重载、可观测性和连接复用。继续复用 Go + remotedialer + Next.js 静态嵌入，不引入运行时 Node.js 或新外部依赖。
 
-该批最初使用 `state.json`；后续存储批次增加可选 SQLite 和进程锁，见 [存储设计](storage.md)。会话、票据、探测快照与连接池仍在内存中，尚无分布式 Session Registry 或 SSO。
+该批最初使用 `state.json`；后续存储批次增加可选 SQLite 和进程锁，见 [存储设计](storage.md)。会话、票据、探测快照与连接池仍在内存中，尚无分布式 Session Registry。第三批新增控制面 OIDC 和账号生命周期，见 [OIDC 设计](oidc.md)。
 
 ## 2. 权限模型与兼容性
 
