@@ -24,6 +24,11 @@ jobs:
         working-directory: web
       - run: npm run test:e2e
         working-directory: web
+      - name: Validate GoReleaser configuration
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          version: v2.18.3
+          args: check
       - uses: actions/upload-artifact@v4
         with:
           name: tunnel-linux-amd64

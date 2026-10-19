@@ -1,0 +1,72 @@
+version: 2
+project_name: tunnel
+
+before:
+  hooks:
+    # Build the real Next.js static export before every Go cross compilation.
+    - make frontend
+
+builds:
+  - id: tunnel
+    main: ./cmd/tunnel
+    binary: tunnel
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{ .Version }} -X main.commit={{ .Commit }} -X main.date={{ .Date }}
+    mod_timestamp: '{{ .CommitTimestamp }}'
+
+archives:
+  - id: packages
+    ids:
+      - tunnel
+    name_template: '{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}'
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    files:
+      - README.md
+      - CHANGELOG.md
+      - examples/**
+      - docs/console.png
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^chore:'
+
+release:
+  github:
+    owner: XUJiahua
+    name: tunnel-mvp
+  name_template: '{{ .Tag }}'
+  # CI validates uploaded assets before making the release public.
+  draft: true
+  use_existing_draft: true
+  replace_existing_artifacts: true
+  prerelease: auto
+  header: |
+    ## Tunnel MVP {{ .Tag }}
+
+    Go 控制面与内网 Agent，内置 Next.js 控制台；运行时无需 Node.js。
+    支持 Linux、macOS、Windows 的 amd64 / arm64。
+    每个压缩包包含二进制、README、更新说明和 examples 配置，SHA-256 见 checksums.txt。
+
+    解压后运行 `tunnel version` 查看版本；Server 和 Agent 使用同一二进制。

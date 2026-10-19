@@ -14,6 +14,12 @@ import (
 	"github.com/XUJiahua/tunnel-mvp/internal/control"
 )
 
+var (
+	version = "dev"
+	commit  = "none"
+	date    = "unknown"
+)
+
 func main() {
 	if err := run(); err != nil {
 		slog.Error("tunnel stopped", "error", err)
@@ -22,7 +28,11 @@ func main() {
 }
 func run() error {
 	if len(os.Args) < 2 {
-		return fmt.Errorf("usage: tunnel <server|agent> -config config.json")
+		return fmt.Errorf("usage: tunnel <server|agent> -config config.json; tunnel version")
+	}
+	if os.Args[1] == "version" || os.Args[1] == "--version" {
+		fmt.Printf("tunnel %s (commit: %s, built: %s)\n", version, commit, date)
+		return nil
 	}
 	f := flag.NewFlagSet(os.Args[1], flag.ContinueOnError)
 	path := f.String("config", "", "JSON configuration file")

@@ -11,3 +11,4 @@ playwright-report/
 *.tsbuildinfo
 web/test-results/
 web/playwright-report/
+/dist/

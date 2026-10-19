@@ -37,6 +37,31 @@ flowchart TB
 
 隧道使用 [rancher/remotedialer](https://github.com/rancher/remotedialer)，依赖固定在 `go.mod` / `go.sum`。Go `http.Transport.DialContext` 按站点选择远程 Dialer，HTTP / TLS 实际经 Agent 到达目标。所有站点使用同一个网关端口，无需逐个开放公网端口。
 
+## 下载二进制
+
+从 [GitHub Releases](https://github.com/XUJiahua/tunnel-mvp/releases) 下载对应平台的压缩包，无需安装 Go 或 Node.js。
+
+| 系统 | 架构 | v0.1.0 文件 |
+| --- | --- | --- |
+| Linux | amd64 / arm64 | `tunnel_0.1.0_linux_<架构>.tar.gz` |
+| macOS | amd64 / arm64 | `tunnel_0.1.0_darwin_<架构>.tar.gz` |
+| Windows | amd64 / arm64 | `tunnel_0.1.0_windows_<架构>.zip` |
+
+压缩包包含二进制、README、更新说明与 `examples/`，前端已嵌入二进制。Linux / macOS 解压后运行 `./tunnel version`，Windows 运行 `.\tunnel.exe version`。Apple Silicon 选择 `darwin_arm64`，Intel Mac 选择 `darwin_amd64`。macOS 产物暂未签名和公证。
+
+下载同一 Release 中的 `checksums.txt`，验证压缩包：
+
+```bash
+# Linux（只检查已下载的文件）
+sha256sum --check --ignore-missing checksums.txt
+# macOS（对照 checksums.txt 中对应条目）
+shasum -a 256 tunnel_0.1.0_darwin_arm64.tar.gz
+```
+
+Windows 可用 `Get-FileHash .\tunnel_0.1.0_windows_amd64.zip -Algorithm SHA256` 对照校验文件。
+
+随后参照下文配置 Server / Agent；使用下载产物时将 `./bin/tunnel` 替换为 `./tunnel`（Windows 为 `.\tunnel.exe`）。
+
 ## 本地启动
 
 构建需要 Go **1.27+**、Node.js **24+** 和 npm。运行产物只需要操作系统的 CA / DNS 环境。
@@ -168,7 +193,7 @@ Compose 默认只将 Go 的 8080 绑定到公网机器的回环地址，由宿�
 
 ```bash
 make build  # npm ci → Next.js 静态导出 → 复制到 embed 目录 → 编译 Go
-make test   # Go race tests、go vet、Next.js TypeScript 检查
+make test   # Go race / vet、TypeScript、发布标签保护检查
 
 # 可选浏览器验收（先完成 make build）
 cd web
@@ -192,3 +217,29 @@ web/                  Next.js App Router 控制台源码
 scripts/embed.mjs     将静态导出复制至 Go embed 目录
 examples/             本地 / 公网配置、Caddy 示例
 ```
+
+## 发布新版本
+
+`.goreleaser.yaml` 固定六个平台矩阵，`CGO_ENABLED=0` 交叉编译。发布前钩子先执行 `make frontend`，确保每个平台都嵌入同一份 Next.js 静态资源。GoReleaser 注入版本、提交 SHA 与构建时间；Linux / macOS 输出 tar.gz，Windows 输出 zip，并生成 SHA-256 校验文件。
+
+正常发布：提交代码后推送版本标签，CI 检查通过后自动创建 GitHub Release 并上传产物。
+
+```bash
+git tag -a v0.2.0 -m "Release v0.2.0"
+git push origin v0.2.0
+```
+
+也可在 Actions → release → Run workflow 中选择要发布的代码引用并填写 `tag`，CI 在检查通过后创建缺失的标签。标签存在时必须指向当前所选提交，工作流不会移动已有标签。重试旧版本时选择该版本标签作为工作流引用，或使用 GitHub Actions 的失败任务重跑功能。
+
+首次 `v0.1.0` 由 `publish-v0.1.0.yml` 的一次性入口调用同一个发布工作流；已发布后会跳过。因为 `GITHUB_TOKEN` 推送的标签不会触发新的工作流，首次发布在同一 CI 调用中完成打包与上传。
+
+CI 会先执行构建、Go race / vet、TypeScript 与真实 Agent 的 Playwright 测试，再由 GoReleaser 上传到草稿 Release。CI 校验六个平台矩阵、SHA-256、压缩包完整性与必要文件，再下载附件重新校验，全部通过后公开发布。仅发布工作流具有 `contents: write` 权限；普通构建保持只读，不需要额外 PAT。
+
+本地验证需要安装 GoReleaser **v2.18.3**、Python **3.11+** 和前述 Go / Node.js：
+
+```bash
+make release-check
+make release-snapshot
+```
+
+快照包输出到 `dist/`，不创建远端标签、不上传 Release。生产包由 CI 的 `goreleaser release --clean` 生成。

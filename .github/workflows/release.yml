@@ -1,0 +1,82 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Version tag to publish (for example v0.2.0)'
+        required: true
+        type: string
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.2'
+          cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Build embedded console and host binary
+        run: make build
+      - name: Test Go and TypeScript
+        run: make test
+      - name: Install test browser
+        run: npx playwright install --with-deps chromium
+        working-directory: web
+      - name: Verify browser-to-Agent access
+        run: npm run test:e2e
+        working-directory: web
+      - name: Install GoReleaser
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          distribution: goreleaser
+          version: v2.18.3
+          install-only: true
+      - name: Validate release configuration
+        run: goreleaser check
+      - name: Prepare immutable version tag
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: bash scripts/prepare-release.sh
+      - name: Cross-compile and upload packages to a draft Release
+        run: goreleaser release --clean --parallelism 2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NEXT_TELEMETRY_DISABLED: '1'
+      - name: Verify all local release packages
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: python3 scripts/verify-release.py dist --version "${RELEASE_TAG#v}"
+      - name: Download and verify uploaded assets, then publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          gh release download "$RELEASE_TAG" --dir "$RUNNER_TEMP/tunnel-release-assets"
+          python3 scripts/verify-release.py "$RUNNER_TEMP/tunnel-release-assets" --version "${RELEASE_TAG#v}"
+          gh release edit "$RELEASE_TAG" --draft=false

@@ -1,0 +1,46 @@
+# One-time entry point for the initial release, because the connected GitHub
+# API can commit files but cannot directly create tags or dispatch workflows.
+# GITHUB_TOKEN-created tags do not trigger a second workflow, so invoke the
+# reusable release workflow directly. Future releases use tags or dispatch.
+name: publish-v0.1.0
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/publish-v0.1.0.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      publish: ${{ steps.release.outputs.publish }}
+    steps:
+      - name: Skip if v0.1.0 is already published
+        id: release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          status=$(curl --silent --show-error --output release.json --write-out '%{http_code}' \
+            --header "Authorization: Bearer ${GH_TOKEN}" \
+            --header 'Accept: application/vnd.github+json' \
+            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/releases/tags/v0.1.0")
+          case "$status" in
+            200)
+              draft=$(python3 -c 'import json; print(str(json.load(open("release.json"))["draft"]).lower())')
+              echo "publish=$draft" >> "$GITHUB_OUTPUT"
+              ;;
+            404) echo 'publish=true' >> "$GITHUB_OUTPUT" ;;
+            *) cat release.json; exit 1 ;;
+          esac
+  publish:
+    needs: check
+    if: needs.check.outputs.publish == 'true'
+    uses: ./.github/workflows/release.yml
+    with:
+      tag: v0.1.0
