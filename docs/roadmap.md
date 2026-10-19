@@ -119,6 +119,12 @@
 - 真实 Keycloak OTP 控制台 → Agent → 应用独立 OIDC → 再次 SSO；禁用后应用入口被拒绝。
 - 设计：[应用 OIDC](design/application-oidc.md)。操作：[接入与故障演练](application-oidc-operations.md)。
 
+## 第二十批：验收记录与 HA 设计提案
+
+- 对照前十九批补齐端到端矩阵、实际验证与未验证范围，保留尚未实现的代码扩展。
+- 设计：[控制面 HA](design/control-plane-ha.md)；操作：[HA/目标环境验收](ha-operations.md)；证据：[端到端矩阵](e2e-acceptance.md)。
+- 本批没有实现或宣称支持 HA，后续代码工作按 HA-1 至 HA-4 分阶段推进。
+
 ## 后续边界
 
 - 控制面仍为单实例；共享数据库、会话撤销、隧道所有权路由及故障隔离需要作为整体设计/验收，不能用共享 SQLite 文件或去掉进程锁代替。
