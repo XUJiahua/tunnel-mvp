@@ -94,9 +94,14 @@ func (p *testIdP) serve(w http.ResponseWriter, r *http.Request) {
 		if hook != nil {
 			hook()
 		}
-		claims := map[string]any{"iss": p.server.URL, "sub": "subject-A", "aud": "console", "exp": time.Now().Add(30 * time.Minute).Unix(), "iat": time.Now().Unix(), "nonce": q.Get("nonce"), "email": "admin", "preferred_username": "admin", "roles": []string{"admin"}}
+		claims := map[string]any{"iss": p.server.URL, "sub": "subject-A", "aud": "console", "exp": time.Now().Add(30 * time.Minute).Unix(), "iat": time.Now().Unix(), "nonce": q.Get("nonce"), "sid": "sid-a", "email": "admin", "preferred_username": "admin", "roles": []string{"admin"}}
 		signing := p.key
 		switch mode {
+		case "sid-b":
+			claims["sid"] = "sid-b"
+		case "mfa":
+			claims["acr"] = "2"
+			claims["amr"] = []string{"pwd", "otp"}
 		case "signature":
 			signing = p.wrongKey
 		case "nonce":

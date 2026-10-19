@@ -1207,10 +1207,12 @@ td code {
     order: 3;
     width: 100%;
     margin: 6px 0 0;
-    justify-content: space-between;
+    justify-content: flex-start;
+    flex-wrap: wrap;
+    max-width: 100%;
   }
   nav button {
-    padding: 10px 16px;
+    padding: 10px 12px;
   }
   .profile strong {
     font-size: 11px;
@@ -1387,4 +1389,11 @@ td code {
   justify-content: center;
   text-decoration: none;
   margin-top: 14px;
+}
+
+.session-agent {
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }

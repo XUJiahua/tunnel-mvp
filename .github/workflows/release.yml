@@ -59,6 +59,23 @@ jobs:
         working-directory: web
         env:
           TUNNEL_TEST_STORAGE: sqlite
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Prepare verified Keycloak distribution
+        run: bash scripts/prepare-keycloak-e2e.sh "$RUNNER_TEMP/tunnel-keycloak"
+      - name: Verify real Keycloak and OTP with JSON
+        run: pnpm exec playwright test tests/keycloak.spec.ts
+        working-directory: web
+        env:
+          KEYCLOAK_HOME: ${{ runner.temp }}/tunnel-keycloak/server
+      - name: Verify real Keycloak and OTP with SQLite
+        run: pnpm exec playwright test tests/keycloak.spec.ts
+        working-directory: web
+        env:
+          KEYCLOAK_HOME: ${{ runner.temp }}/tunnel-keycloak/server
+          TUNNEL_TEST_STORAGE: sqlite
       - name: Install GoReleaser
         uses: goreleaser/goreleaser-action@v7
         with:

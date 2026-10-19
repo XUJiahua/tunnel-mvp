@@ -9,6 +9,7 @@ import {
   useState,
 } from "react";
 
+import { SessionsPanel } from "./sessions";
 import { api, APIError } from "./api";
 import { AuditPanel, Editor, Grants, ResourceEditor } from "./operations";
 
@@ -21,6 +22,7 @@ type User = {
   disabled?: boolean;
   identity?: { issuer: string; subject: string };
   passwordLogin?: boolean;
+  sessionMethod?: string;
 };
 type Site = { id: string; name: string; online: boolean; createdAt: string };
 type Service = { id: string; name: string; siteID: string; url: string };
@@ -177,7 +179,11 @@ function Modal({
 }
 
 export default function Home() {
-  const [authOptions, setAuthOptions] = useState({ oidc: false, issuer: "" });
+  const [authOptions, setAuthOptions] = useState({
+    oidc: false,
+    issuer: "",
+    oidcLogout: false,
+  });
   const [memberAuth, setMemberAuth] = useState("local");
   const [user, setUser] = useState<User | null>(null);
   const [booting, setBooting] = useState(true);
@@ -202,6 +208,10 @@ export default function Home() {
   const [probing, setProbing] = useState("");
   const [opening, setOpening] = useState("");
   const admin = user?.role === "admin";
+  const sessionExpired = useCallback(() => {
+    setUser(null);
+    setTab("overview");
+  }, []);
 
   const refresh = useCallback(async (u: User) => {
     const [a, b, c, health] = await Promise.all([
@@ -427,6 +437,7 @@ export default function Home() {
     sites: ["站点", "连接你的数据面，建立安全的出站隧道。"],
     services: ["应用", "从这里进入已授权的内网服务。"],
     users: ["访问权限", "为成员分配整站或单独应用访问权限。"],
+    sessions: ["登录设备", "查看活跃会话，并撤销指定设备的访问。"],
     audit: ["审计日志", "查询访问、权限变更与健康状态变化。"],
   };
 
@@ -700,6 +711,7 @@ export default function Home() {
             ["overview", "grid", "概览"],
             ["sites", "server", "站点"],
             ["services", "apps", "应用"],
+            ["sessions", "shield", "登录设备"],
             ...(admin
               ? [
                   ["users", "users", "访问权限"],
@@ -757,6 +769,24 @@ export default function Home() {
             <span>{tab === "overview" ? "概览" : titles[tab][0]}</span>
           </div>
           <div className="topbar-status">
+            {user.sessionMethod === "oidc" && authOptions.oidcLogout && (
+              <button
+                className="subtle"
+                onClick={async () => {
+                  try {
+                    const result = await api<{ url: string }>(
+                      "/logout/identity",
+                      "POST",
+                    );
+                    window.location.assign(result.url);
+                  } catch (e) {
+                    setError((e as Error).message);
+                  }
+                }}
+              >
+                退出统一身份
+              </button>
+            )}
             {user.passwordLogin && (
               <button
                 className="subtle"
@@ -948,6 +978,9 @@ export default function Home() {
                 />
               )}
             </>
+          )}
+          {tab === "sessions" && (
+            <SessionsPanel admin={admin} onExpired={sessionExpired} />
           )}
           {tab === "audit" && admin && <AuditPanel />}
           {tab === "users" && (

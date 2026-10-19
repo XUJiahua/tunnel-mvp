@@ -15,8 +15,12 @@ const consoleCookie = "tunnel_console"
 const accessCookie = "tunnel_access"
 
 type session struct {
-	UserID  string
-	Expires time.Time
+	ID                          string
+	CreatedAt, LastSeen         time.Time
+	UserAgent, RemoteIP, Method string
+	Issuer, Subject, SID        string
+	UserID                      string
+	Expires                     time.Time
 }
 type grant struct {
 	SessionKey string
@@ -91,6 +95,10 @@ func (s *Server) currentUser(r *http.Request) (User, string, bool) {
 	key := digest(c.Value)
 	s.auth.mu.Lock()
 	sess, ok := s.auth.sessions[key]
+	if ok && time.Since(sess.LastSeen) >= time.Minute {
+		sess.LastSeen = time.Now()
+		s.auth.sessions[key] = sess
+	}
 	s.auth.mu.Unlock()
 	if !ok || time.Now().After(sess.Expires) {
 		return User{}, "", false
@@ -139,7 +147,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		fail(w, 401, "invalid username or password")
 		return
 	}
-	s.issueSession(w, found, time.Now().Add(12*time.Hour))
+	s.issueSession(w, found, time.Now().Add(12*time.Hour), sessionMetadata(r, "password", "", "", ""))
 	s.audit("login", found.Username, "", "")
 	jsonOut(w, 200, publicUser(found))
 }

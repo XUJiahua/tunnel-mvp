@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/XUJiahua/tunnel-mvp/internal/config"
 	"github.com/XUJiahua/tunnel-mvp/internal/state"
@@ -79,6 +80,20 @@ func storageCommand(path *string) *cobra.Command {
 	}}
 	validate.Flags().StringVar(&validatePath, "input", "", "Backup file to validate")
 	_ = validate.MarkFlagRequired("input")
-	root.AddCommand(inspect, export, migrate, restore, validate)
+	var recoveryUsername string
+	recovery := &cobra.Command{Use: "reset-admin-password", Short: "Offline reset of an existing administrator; password uses TUNNEL_RECOVERY_PASSWORD", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+		c, err := effective(cmd)
+		if err != nil {
+			return err
+		}
+		summary, err := state.ResetAdminPassword(c.DataDir, c.Storage, recoveryUsername, os.Getenv("TUNNEL_RECOVERY_PASSWORD"))
+		if err != nil {
+			return err
+		}
+		return output(cmd, summary)
+	}}
+	recovery.Flags().StringVar(&recoveryUsername, "username", "", "Existing administrator username")
+	_ = recovery.MarkFlagRequired("username")
+	root.AddCommand(inspect, export, migrate, restore, validate, recovery)
 	return root
 }

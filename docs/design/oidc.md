@@ -44,7 +44,7 @@ OIDC 会话到期时间为 `min(ID Token exp, 登录完成时间 + oidc.sessionM
 | 收回应用权限 | 沿用前批逻辑，关闭失去权限的应用请求 |
 | Server 重启 | 清空本地会话和 pending flow，重新登录 |
 
-本地退出不会清理 IdP SSO Cookie。再次点击统一登录时，IdP 可能无需输入密码。未实现 RP-initiated logout、back-channel logout、令牌 introspection、SCIM 或 IdP 禁用事件同步。因此仅在 IdP 禁用用户，不会立即撤销已建立的本地会话；紧急回收必须同时在控制台禁用成员。MFA 由 IdP 配置，控制面不自行断言用户已满足特定 `acr/amr` 策略。
+本地退出不会清理 IdP SSO Cookie。再次点击统一登录时，IdP 可能无需输入密码。第四批增加 RP 主动退出、back-channel logout 和可选 acr/amr 策略，见 [会话生命周期设计](session-lifecycle.md)。仍未提供令牌 introspection、SCIM 或完整 IdP 禁用事件同步。因此仅在 IdP 禁用用户，不会立即撤销已建立的本地会话；紧急回收必须同时在控制台禁用成员。MFA 由 IdP 执行；第四批可配置可信 ID Token 的 acr/amr 要求。
 
 ## API
 
@@ -74,6 +74,6 @@ JSON 字段均可选，旧数据无需改写即可读取。新导出使用 `tunn
 - 真实 Agent 隧道测试扩展禁用与身份修改后的 WebSocket/SSE 关闭；协议登录测试覆盖 OIDC 用户应用票据和撤销。
 - Playwright 跨源走完整页面登录，创建 OIDC 成员、验证无管理员提权、无本地重置入口、禁用/启用与身份修改；同一套验收分别运行 JSON/SQLite。
 - 状态测试覆盖 v1 schema 事务升级与失败回滚、旧 v1 backup 读取、身份唯一性、恢复管理员约束和双后端恢复。
-- 仓库提供 Keycloak 接入步骤；自动化使用测试 IdP，不把协议测试结果表述为已运行某个生产 IdP 或已完成生产安全审计。
+- 第三批提供 Keycloak 接入步骤及测试 IdP；第四批补真实 Keycloak/OTP/Agent/退出通知端到端验收。该验收不等于生产安全审计。
 
 参考：[go-oidc](https://github.com/coreos/go-oidc/tree/v3.19.0)、[oauth2 PKCE](https://pkg.go.dev/golang.org/x/oauth2@v0.36.0)、[OpenID Connect Core](https://openid.net/specs/openid-connect-core-1_0.html)、[Keycloak OIDC](https://www.keycloak.org/securing-apps/oidc-layers)。

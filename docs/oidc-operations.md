@@ -84,11 +84,11 @@ Subject 必须是该客户端 ID Token 中的 `sub`，精确区分大小写，�
 
 仅在 IdP 禁用用户，不会立即同步到 tunnel。紧急离职回收需同时在 tunnel 禁用成员；单纯 IdP 禁用后，已建立的会话可继续到其原到期时间。OIDC 会话上限为配置时间与 ID Token 剩余有效期的较短者。
 
-控制台“退出登录”只退出当前 tunnel 会话。再次统一登录可能直接复用 IdP 的 SSO 状态。需离开共享电脑时，同时退出 IdP/浏览器会话。MFA 在 IdP 配置和执行；本批不校验特定 acr/amr，不提供全局单点退出或设备会话列表。
+控制台“退出登录”只退出当前 tunnel 会话。再次统一登录可能直接复用 IdP 的 SSO 状态。需离开共享电脑时，同时退出 IdP/浏览器会话。MFA 在 IdP 配置和执行；第四批增加可选 acr/amr 策略、back-channel/RP 退出与设备列表，见 [会话与退出手册](session-operations.md)。
 
 ## 6. Keycloak 本地接入演练
 
-本节是操作示例。仓库自动化使用签名测试 IdP；当前环境没有 Docker，未运行 Keycloak 容器验收。请在演练环境完成以下步骤后接入生产。
+本节是容器操作示例。第四批已增加无需 Docker 的原生 Keycloak + OTP 端到端验证，见 [会话与退出手册](session-operations.md)；下列 Compose 部署仍需按实际环境演练。
 
 1. 设置 `KC_BOOTSTRAP_ADMIN_PASSWORD` 为本地演练管理员密码，执行：
 

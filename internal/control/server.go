@@ -159,6 +159,11 @@ func (s *Server) Run(ctx context.Context) error {
 }
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/me/sessions", s.require(false, s.listSessions))
+	mux.HandleFunc("GET /api/sessions", s.require(true, s.listSessions))
+	mux.HandleFunc("DELETE /api/me/sessions/{id}", s.require(false, s.deleteSession))
+	mux.HandleFunc("DELETE /api/sessions/{id}", s.require(true, s.deleteSession))
+	mux.HandleFunc("POST /auth/oidc/backchannel-logout", s.backchannelLogout)
 	mux.HandleFunc("GET /api/auth/options", s.authOptions)
 	mux.HandleFunc("GET /auth/oidc/start", s.beginOIDC)
 	mux.HandleFunc("GET /auth/oidc/callback", s.callbackOIDC)
@@ -166,6 +171,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PATCH /api/users/{id}/disabled", s.require(true, s.setDisabled))
 	mux.HandleFunc("POST /api/login", s.login)
 	mux.HandleFunc("POST /api/logout", s.logout)
+	mux.HandleFunc("POST /api/logout/identity", s.require(false, s.logoutIdentity))
 	mux.HandleFunc("POST /api/me/password", s.require(false, s.changePassword))
 	mux.HandleFunc("PATCH /api/sites/{id}", s.require(true, s.updateSite))
 	mux.HandleFunc("PATCH /api/services/{id}", s.require(true, s.updateService))
@@ -174,7 +180,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/status", s.require(false, s.status))
 	mux.HandleFunc("GET /api/audit", s.require(true, s.listAudit))
 	mux.HandleFunc("GET /api/metrics", s.require(true, s.metrics))
-	mux.HandleFunc("GET /api/me", s.require(false, func(w http.ResponseWriter, r *http.Request, u User) { jsonOut(w, 200, publicUser(u)) }))
+	mux.HandleFunc("GET /api/me", s.require(false, s.profile))
 	mux.HandleFunc("GET /api/sites", s.require(false, s.listSites))
 	mux.HandleFunc("POST /api/sites", s.require(true, s.createSite))
 	mux.HandleFunc("DELETE /api/sites/{id}", s.require(true, s.deleteSite))

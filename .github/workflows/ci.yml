@@ -60,3 +60,47 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
         run: go build -trimpath -o "$RUNNER_TEMP/tunnel-cross-check" ./cmd/tunnel
+
+  keycloak-e2e:
+    needs: verify
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        storage: [json, sqlite]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: web/package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: actions/download-artifact@v4
+        with:
+          name: tunnel-linux-amd64
+          path: bin
+      - run: chmod +x bin/tunnel
+      - run: pnpm install --frozen-lockfile
+        working-directory: web
+      - run: pnpm exec playwright install --with-deps chromium
+        working-directory: web
+      - name: Prepare verified Keycloak distribution
+        run: bash scripts/prepare-keycloak-e2e.sh "$RUNNER_TEMP/tunnel-keycloak"
+      - name: Verify real IdP, OTP, Agent and back-channel logout
+        run: pnpm exec playwright test tests/keycloak.spec.ts
+        working-directory: web
+        env:
+          KEYCLOAK_HOME: ${{ runner.temp }}/tunnel-keycloak/server
+          TUNNEL_TEST_STORAGE: ${{ matrix.storage }}
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: keycloak-e2e-${{ matrix.storage }}-failure
+          path: web/test-results

@@ -143,3 +143,25 @@ func TestOIDCConfigPrecedenceAndSecretRedaction(t *testing.T) {
 		t.Fatal("config-file secret accepted")
 	}
 }
+
+func TestAuthenticationContextConfiguration(t *testing.T) {
+	t.Setenv("TUNNEL_OIDC_ISSUER", "https://sso.example/realms/test")
+	t.Setenv("TUNNEL_OIDC_CLIENT_ID", "console")
+	t.Setenv("TUNNEL_OIDC_REQUIRED_ACR", "2,3")
+	out, err := execute("server", "--oidc-required-amr", "pwd,otp", "--check-config")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result struct {
+		OIDC struct {
+			ACR []string `json:"requiredACR"`
+			AMR []string `json:"requiredAMR"`
+		} `json:"oidc"`
+	}
+	if err = json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatal(err)
+	}
+	if len(result.OIDC.ACR) != 2 || result.OIDC.ACR[0] != "2" || len(result.OIDC.AMR) != 2 || result.OIDC.AMR[1] != "otp" {
+		t.Fatal("CSV policy configuration failed", out)
+	}
+}

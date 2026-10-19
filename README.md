@@ -12,6 +12,7 @@
 - [设计说明](docs/design/operations-and-access.md)：授权语义、会话撤销、连接池隔离和兼容性。
 - [存储设计](docs/design/storage.md)与[迁移/备份恢复手册](docs/storage-operations.md)：JSON / SQLite、目录锁与离线维护。
 - [OIDC 设计](docs/design/oidc.md)与[统一登录/禁用手册](docs/oidc-operations.md)：显式身份绑定、Keycloak 接入和即时撤销边界。
+- [会话生命周期设计](docs/design/session-lifecycle.md)与[设备/退出/恢复手册](docs/session-operations.md)：逐设备撤销、真实 Keycloak/OTP 验证和离线管理员恢复。
 - [实施路线图](docs/roadmap.md)：已交付能力与后续数据库、SSO、HA 等工作。
 
 ## 已实现
@@ -29,6 +30,7 @@
 - Agent 侧 CIDR + 端口 + 可选精确主机名白名单；内网 DNS 解析后校验 IP，并直接连接该 IP。
 - HTTPS Origin 证书与 SNI 校验，系统 CA 信任；不提供跳过证书校验的开关。
 - 退出、改密、删除、收回授权及会话到期主动关闭受影响的 WebSocket / SSE / HTTP 请求。
+- 登录设备列表、逐会话撤销、离线管理员恢复；OIDC back-channel/RP 退出及可选 acr/amr 策略，真实 Keycloak + OTP 双后端端到端测试。
 - Agent `--watch-config` 校验后自动重载本地 ACL，通过重连撤销旧连接。
 - 按应用隔离的 HTTP 连接池、周期 HEAD 探测、状态快照、Prometheus 指标与告警配置示例。
 - JSON（默认）/ SQLite 状态存储、数据目录进程锁、离线迁移和带校验和的跨后端备份恢复。
@@ -271,7 +273,7 @@ Compose 默认只将 Go 的 8080 绑定到公网机器的回环地址，由宿�
 - 单控制面进程、单数据目录；没有多实例共享存储、HA 或跨网关隧道路由。新版本会拒绝第二个进程打开同一数据目录；不要使用多主机共享文件系统。SQLite 不提供控制面 HA。
 - 用户 / 访问会话与短期票据在内存中，重启 Server 后需重新登录；用户、站点、服务配置保留。
 - 授权在每个 HTTP 请求及 WebSocket Upgrade 时检查；退出、密码变更、授权收回或到期主动关闭受影响的请求。删除站点 / 轮换令牌会关闭整个站点隧道。
-- 已支持成员授权编辑、自助改密和管理员重置成员密码；支持显式 OIDC 绑定与账号禁用；尚无离线管理员密码恢复、用户组、多租户、自定义角色或 IdP 全局退出。MFA 由 IdP 执行，控制面不强制 acr/amr。
+- 已支持成员授权编辑、自助改密和管理员重置成员密码；支持显式 OIDC 绑定与账号禁用；已支持离线管理员恢复、OIDC back-channel/RP 退出和可选 acr/amr 策略；尚无用户组、多租户及自定义角色。
 - 目标登记由管理员执行；成员不能提交任意目标地址。通过新增应用可动态访问 Agent 白名单内的新目标。
 - 不支持 SSH / RDP / 数据库的浏览器协议网关，也不支持 UDP、P2P 或 QUIC。
 - 连接池按应用隔离并在 Agent 断线/目标修改时清理；已验证真实隧道连接复用。尚未进行生产容量压测或生产安全审计；连接绑定身份的认证协议需要额外适配。

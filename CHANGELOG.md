@@ -2,6 +2,9 @@
 
 ## 未发布
 
+- 会话设备列表、成员/管理员逐会话撤销、离线管理员密码恢复。
+- OIDC back-channel/RP 退出、可选 acr/amr 策略；补真实 Keycloak + OTP + Agent HTTP/WS/SSE 双后端端到端验证与 CI。
+
 - 发布打包暂采用 GoReleaser 串行执行，规避复查中重复出现的并行 gzip 截断，并保留完整解压/CRC/SHA-256 校验。
 
 - 新增可选 OIDC 控制台登录、PKCE/state/nonce 与签名验证、显式身份绑定、OIDC 专用成员及账号禁用/启用。

@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"golang.org/x/crypto/bcrypt"
 )
 
 type Summary struct {
@@ -158,4 +160,38 @@ func Restore(dir, kind, input string) (Summary, error) {
 		return Summary{}, err
 	}
 	return summarize(kind, s), nil
+}
+
+// ResetAdminPassword is an explicit offline recovery operation. It never creates
+// a user or bypasses state validation, and shares the Server's lifetime lock.
+func ResetAdminPassword(dir, kind, username, password string) (Summary, error) {
+	if len(password) < 12 || len(password) > 72 {
+		return Summary{}, fmt.Errorf("recovery password must be 12–72 bytes")
+	}
+	if username == "" {
+		return Summary{}, fmt.Errorf("administrator username required")
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return Summary{}, err
+	}
+	repo, err := Open(dir, kind, nil)
+	if err != nil {
+		return Summary{}, err
+	}
+	defer repo.Close()
+	err = repo.Update(func(next *State) error {
+		for i := range next.Users {
+			if next.Users[i].Username == username && next.Users[i].Role == "admin" {
+				next.Users[i].PasswordHash = string(hash)
+				next.Users[i].Disabled = false
+				return nil
+			}
+		}
+		return fmt.Errorf("existing administrator not found")
+	})
+	if err != nil {
+		return Summary{}, err
+	}
+	return summarize(kind, repo.Snapshot()), nil
 }

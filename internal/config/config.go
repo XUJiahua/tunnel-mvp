@@ -33,9 +33,11 @@ func (l *Logging) Validate() error {
 }
 
 type OIDC struct {
-	Issuer         string `json:"issuer" mapstructure:"issuer"`
-	ClientID       string `json:"clientID" mapstructure:"clientID"`
-	SessionMinutes int    `json:"sessionMinutes" mapstructure:"sessionMinutes"`
+	RequiredACR    []string `json:"requiredACR,omitempty" mapstructure:"requiredACR"`
+	RequiredAMR    []string `json:"requiredAMR,omitempty" mapstructure:"requiredAMR"`
+	Issuer         string   `json:"issuer" mapstructure:"issuer"`
+	ClientID       string   `json:"clientID" mapstructure:"clientID"`
+	SessionMinutes int      `json:"sessionMinutes" mapstructure:"sessionMinutes"`
 }
 type Server struct {
 	OIDC                 OIDC `json:"oidc" mapstructure:"oidc"`
@@ -79,6 +81,11 @@ func Origin(raw string) (*url.URL, error) {
 }
 func (s *Server) Validate() error {
 	if s.OIDC.Issuer != "" || s.OIDC.ClientID != "" {
+		for _, value := range append(append([]string{}, s.OIDC.RequiredACR...), s.OIDC.RequiredAMR...) {
+			if strings.TrimSpace(value) == "" || len(value) > 255 {
+				return fmt.Errorf("OIDC required ACR/AMR values must be nonempty and at most 255 bytes")
+			}
+		}
 		if err := state.ValidateIdentity(state.Identity{Issuer: s.OIDC.Issuer, Subject: "config"}); err != nil || strings.TrimSpace(s.OIDC.ClientID) == "" || len(s.OIDC.ClientID) > 255 {
 			return fmt.Errorf("OIDC requires a valid issuer and clientID")
 		}
@@ -88,7 +95,7 @@ func (s *Server) Validate() error {
 		if s.OIDC.SessionMinutes < 1 || s.OIDC.SessionMinutes > 720 {
 			return fmt.Errorf("oidc.sessionMinutes must be 1–720")
 		}
-	} else if s.OIDC.SessionMinutes != 0 {
+	} else if s.OIDC.SessionMinutes != 0 || len(s.OIDC.RequiredACR) > 0 || len(s.OIDC.RequiredAMR) > 0 {
 		return fmt.Errorf("OIDC sessionMinutes requires issuer and clientID")
 	}
 

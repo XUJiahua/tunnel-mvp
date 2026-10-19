@@ -10,19 +10,21 @@ import (
 
 type userView struct {
 	User
-	PasswordLogin bool `json:"passwordLogin"`
+	PasswordLogin bool   `json:"passwordLogin"`
+	SessionMethod string `json:"sessionMethod,omitempty"`
 }
 
 func publicUser(u User) userView {
 	local := u.PasswordHash != ""
 	u.PasswordHash = ""
-	return userView{u, local}
+	return userView{User: u, PasswordLogin: local}
 }
-func (s *Server) issueSession(w http.ResponseWriter, u User, expires time.Time) {
+func (s *Server) issueSession(w http.ResponseWriter, u User, expires time.Time, metadata session) {
 	token := randomID()
 	s.auth.mu.Lock()
 	s.auth.clean(time.Now())
-	s.auth.sessions[digest(token)] = session{u.ID, expires}
+	metadata.UserID, metadata.Expires = u.ID, expires
+	s.auth.sessions[digest(token)] = metadata
 	s.auth.mu.Unlock()
 	http.SetCookie(w, &http.Cookie{Name: consoleCookie, Value: token, Path: "/", HttpOnly: true, Secure: s.secure, SameSite: http.SameSiteLaxMode, MaxAge: max(1, int(time.Until(expires).Seconds()))})
 }
@@ -97,4 +99,13 @@ func (s *Server) mutateMember(w http.ResponseWriter, r *http.Request, actor User
 	s.revokeUser(out.ID)
 	s.audit(event, actor.Username, "", out.ID)
 	jsonOut(w, 200, publicUser(out))
+}
+
+func (s *Server) profile(w http.ResponseWriter, r *http.Request, u User) {
+	_, key, _ := s.currentUser(r)
+	view := publicUser(u)
+	s.auth.mu.Lock()
+	view.SessionMethod = s.auth.sessions[key].Method
+	s.auth.mu.Unlock()
+	jsonOut(w, 200, view)
 }

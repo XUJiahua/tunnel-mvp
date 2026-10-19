@@ -85,7 +85,7 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 	s.auth.clean(time.Now())
 	s.auth.mu.Unlock()
 	s.cancelRequests(func(req liveRequest) bool { return req.sessionKey == key })
-	http.SetCookie(w, &http.Cookie{Name: consoleCookie, Path: "/", MaxAge: -1, HttpOnly: true, Secure: s.secure, SameSite: http.SameSiteLaxMode})
+	s.clearConsoleCookie(w)
 	if ok {
 		s.audit("logout", u.Username, "", "")
 	}
