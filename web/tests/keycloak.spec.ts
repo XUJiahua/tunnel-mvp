@@ -324,7 +324,8 @@ test("real Keycloak OTP, authorization, session revocation and back-channel logo
     await expect
       .poll(() => otp(secret), { timeout: 35_000 })
       .not.toBe(enrollmentCode);
-    await member.locator("#otp").fill(otp(secret));
+    const firstLoginCode = otp(secret);
+    await member.locator("#otp").fill(firstLoginCode);
     await member.locator("#kc-login").click();
     await expect(member.locator(".profile")).toContainText("keycloak-member");
     await expect(member.getByRole("button", { name: "访问权限" })).toHaveCount(
@@ -431,6 +432,24 @@ test("real Keycloak OTP, authorization, session revocation and back-channel logo
     await expect(
       member.getByRole("button", { name: "登录控制台", exact: true }),
     ).toBeVisible();
+    // Exercise RP-initiated logout against the real provider too. It must clear
+    // the local session before navigation and end the provider SSO session.
+    await passwordLogin(member);
+    await expect
+      .poll(() => otp(secret), { timeout: 35_000 })
+      .not.toBe(firstLoginCode);
+    await member.locator("#otp").fill(otp(secret));
+    await member.locator("#kc-login").click();
+    await expect(member.locator(".profile")).toContainText("keycloak-member");
+    await member
+      .getByRole("button", { name: "退出统一身份", exact: true })
+      .click();
+    await member.getByRole("button", { name: "Logout", exact: true }).click();
+    await expect(
+      member.getByRole("button", { name: "登录控制台", exact: true }),
+    ).toBeVisible();
+    await member.getByRole("link", { name: "使用统一身份登录" }).click();
+    await expect(member.locator("#username")).toBeVisible();
     await member.screenshot({
       path: test.info().outputPath("keycloak-backchannel-logout.png"),
       fullPage: true,

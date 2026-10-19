@@ -49,6 +49,6 @@ OIDC 会话可显式调用 `POST /api/logout/identity`。先撤销当前 tunnel 
 - 双后端 Go race 覆盖设备所有权、管理员逐会话撤销、自己退出、其他设备保留、真实 Agent 的 WS/SSE 关闭，以及恢复锁/引用保持。
 - 签名协议测试覆盖退出令牌签名/Issuer/Audience/iat/exp/jti/events/nonce、sid/sub 范围、重放和回调并发；MFA 声明拒绝降级。
 - Playwright 从控制台完成设备撤销和停机 CLI 恢复，并重新登录验收。
-- 独立 Keycloak 26.8.0 + Java 21 进程完成真实 OTP 注册、密码 + OTP 二次登录、单应用授权、Agent 访问、IdP 管理员注销，以及 HTTP/WS/SSE 立即撤销；JSON 与 SQLite 各跑一遍。无需 Docker。
+- 独立 Keycloak 26.8.0 + Java 21 进程完成真实 OTP 注册、密码 + OTP 二次登录、单应用授权、Agent 访问、IdP 管理员注销、RP 主动退出，以及 HTTP/WS/SSE 立即撤销；JSON 与 SQLite 各跑一遍。无需 Docker。
 
 参考：[OIDC Back-Channel Logout 1.0](https://openid.net/specs/openid-connect-backchannel-1_0.html)、[Keycloak 管理指南](https://www.keycloak.org/docs/26.8.0/server_admin/)。

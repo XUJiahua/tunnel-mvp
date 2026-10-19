@@ -69,6 +69,6 @@ TUNNEL_TEST_STORAGE=sqlite KEYCLOAK_HOME=/tmp/tunnel-keycloak-e2e/server pnpm ex
 
 设置 JAVA_HOME 指向 Java 21。脚本使用官方 Keycloak 26.8.0；临时 realm、客户端密钥、用户密码和 H2 数据库每次独立生成，成功后清理；失败保留诊断目录。仅用 loopback 开发端口 19880–19882，不接触现有 IdP。OTP 注册后会等待下一个时间步再二次登录，以符合提供方的一次性 OTP 规则。
 
-测试覆盖真实 Discovery/JWKS、密码 + OTP、未绑定拒绝、本地应用授权、Agent HTTP/WS/SSE、IdP 管理员注销及通知撤销。普通 `test:e2e` 未设置 KEYCLOAK_HOME 时该用例明确跳过；CI 另设 JSON/SQLite 两个真实 Keycloak 作业，不以跳过代替验收。
+测试覆盖真实 Discovery/JWKS、密码 + OTP、未绑定拒绝、本地应用授权、Agent HTTP/WS/SSE、IdP 管理员注销及通知撤销、RP 主动退出和 IdP SSO 会话终止。普通 `test:e2e` 未设置 KEYCLOAK_HOME 时该用例明确跳过；CI 另设 JSON/SQLite 两个真实 Keycloak 作业，不以跳过代替验收。
 
 CI 失败先看对应 job 的 test-results 和 Keycloak 诊断目录。不要并行运行多个 Playwright 进程共用默认 test-results；如需独立并发，给每个进程设置不同 `--output` 并避开固定端口。
