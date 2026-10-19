@@ -208,7 +208,12 @@ export default function Home() {
     setProbes((previous) => {
       const next: Record<string, Probe> = {};
       for (const service of b) {
-        const current = previous[service.id];
+        const previousReport = previous[service.id];
+        const current =
+          previousReport?.target === service.url &&
+          previousReport.siteID === service.siteID
+            ? previousReport
+            : undefined;
         const report = health.reports.find((p) => p.serviceID === service.id);
         if (
           report &&
@@ -373,7 +378,9 @@ export default function Home() {
       if (!res.reachable) setDiagnostic({ service, result: res });
       else {
         setDiagnostic(null);
-        setNotice(`检测成功 · HTTP ${res.status}`);
+        setNotice(
+          `HTTP 可达 · HTTP ${res.status}${res.healthy === false ? "，请检查业务状态" : ""}`,
+        );
       }
     } catch (e) {
       setError((e as Error).message);
