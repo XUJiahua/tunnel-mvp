@@ -183,7 +183,7 @@ func runConfigured(ctx context.Context, c config.Agent, token string, remote *Po
 		var connected atomic.Bool
 		err = connectTunnel(ctx, u.String(), headers, dialer, p.DialContext, func() {
 			connected.Store(true)
-			slog.Info("site tunnel connected", "site", c.SiteID)
+			slog.Info("site tunnel connected", "site", c.SiteID, "version", c.RuntimeVersion)
 		})
 		if ctx.Err() != nil {
 			return nil

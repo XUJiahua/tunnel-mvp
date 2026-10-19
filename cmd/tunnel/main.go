@@ -137,6 +137,7 @@ func newRootCommand() *cobra.Command {
 	agentCommand.PersistentFlags().String("instance-id", "", "Registered Agent instance ID; empty selects legacy site-token mode")
 	agentCommand.PersistentFlags().String("site-id", "", "Registered site ID")
 	agentCommand.PersistentFlags().String("allow", "", "Agent ACL rules as a JSON array (or TUNNEL_ALLOW)")
+	addUpgradeCommands(agentCommand, &path)
 	agentCommand.Flags().Bool("watch-config", false, "Reload valid ACL file changes every 2s; reconnects the tunnel")
 	agentCommand.Flags().Bool("check-config", false, "Validate and print effective configuration without starting")
 	var target string
@@ -161,6 +162,6 @@ func newRootCommand() *cobra.Command {
 	diagnose.Flags().StringVar(&target, "target", "", "HTTP/HTTPS origin to diagnose")
 	_ = diagnose.MarkFlagRequired("target")
 	agentCommand.AddCommand(diagnose)
-	root.AddCommand(storageCommand(&path), server, agentCommand, &cobra.Command{Use: "version", Short: "Print build version", Args: cobra.NoArgs, Run: func(cmd *cobra.Command, _ []string) { fmt.Fprintln(cmd.OutOrStdout(), "tunnel "+build) }})
+	root.AddCommand(releaseKeyCommand(), releaseManifestCommand(), storageCommand(&path), server, agentCommand, &cobra.Command{Use: "version", Short: "Print build version", Args: cobra.NoArgs, Run: func(cmd *cobra.Command, _ []string) { fmt.Fprintln(cmd.OutOrStdout(), "tunnel "+build) }})
 	return root
 }

@@ -17,3 +17,5 @@ web/playwright-report/
 /data-sqlite/
 
 /data-oidc/
+
+__pycache__/

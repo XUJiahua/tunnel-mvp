@@ -351,3 +351,5 @@ make release-snapshot
 Agent 多实例：[设计](docs/design/agent-instances.md) · [登记、切换和凭据操作](docs/agent-operations.md)。
 
 Agent 远程收紧策略：[设计](docs/design/agent-remote-policy.md) · [配置与故障操作](docs/agent-policy-operations.md)。
+
+Agent 签名升级：[设计](docs/design/agent-updates.md) · [发布、主机配置与回滚](docs/agent-update-operations.md)。
