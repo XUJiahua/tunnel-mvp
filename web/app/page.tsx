@@ -9,6 +9,7 @@ import {
   useState,
 } from "react";
 
+import { AdministratorsPanel } from "./administrators";
 import { GroupsPanel } from "./groups";
 import { InvitationLanding } from "./invitation";
 import { SessionsPanel } from "./sessions";
@@ -454,6 +455,7 @@ export default function Home() {
     sites: ["站点", "连接你的数据面，建立安全的出站隧道。"],
     services: ["应用", "从这里进入已授权的内网服务。"],
     users: ["访问权限", "为成员分配整站或单独应用访问权限。"],
+    administrators: ["管理员", "管理全局管理员，敏感变更需要再次验证密码。"],
     groups: ["用户组与邀请", "管理共享授权，并邀请成员自行设置密码。"],
     sessions: ["登录设备", "查看活跃会话，并撤销指定设备的访问。"],
     audit: ["审计日志", "查询访问、权限变更与健康状态变化。"],
@@ -747,6 +749,7 @@ export default function Home() {
               ? [
                   ["users", "users", "访问权限"],
                   ["groups", "users", "用户组与邀请"],
+                  ["administrators", "shield", "管理员"],
                   ["audit", "shield", "审计日志"],
                 ]
               : []),
@@ -1016,6 +1019,13 @@ export default function Home() {
           )}
           {tab === "groups" && admin && (
             <GroupsPanel members={users} sites={sites} services={services} />
+          )}
+          {tab === "administrators" && admin && (
+            <AdministratorsPanel
+              members={users}
+              onChanged={() => user && refresh(user)}
+              onExpired={sessionExpired}
+            />
           )}
           {tab === "audit" && admin && <AuditPanel />}
           {tab === "users" && (

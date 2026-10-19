@@ -77,8 +77,8 @@ func (s *Server) revokeService(id string) {
 	s.monitorMu.Unlock()
 }
 func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
-	s.accessMu.Lock()
-	defer s.accessMu.Unlock()
+	unlock := s.lockMutation(r)
+	defer unlock()
 	u, key, ok := s.currentUser(r)
 	s.auth.mu.Lock()
 	delete(s.auth.sessions, key)
@@ -90,4 +90,16 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 		s.audit("logout", u.Username, "", "")
 	}
 	jsonOut(w, 200, map[string]bool{"ok": true})
+}
+
+// A request may enter through require (administrator mutation) or a public/
+// member handler. Never recursively lock the non-reentrant access mutex.
+type mutationKey struct{}
+
+func (s *Server) lockMutation(r *http.Request) func() {
+	if held, _ := r.Context().Value(mutationKey{}).(bool); held {
+		return func() {}
+	}
+	s.accessMu.Lock()
+	return s.accessMu.Unlock
 }

@@ -53,8 +53,8 @@ func (s *Server) createInvite(w http.ResponseWriter, r *http.Request, actor User
 	token := randomID()
 	now := time.Now().UTC()
 	invite := state.Invite{ID: randomID()[:16], Username: body.Username, TokenHash: digest(token), CreatedAt: now, ExpiresAt: now.Add(time.Duration(body.Hours) * time.Hour), SiteIDs: body.SiteIDs, ServiceIDs: body.ServiceIDs, GroupIDs: body.GroupIDs}
-	s.accessMu.Lock()
-	defer s.accessMu.Unlock()
+	unlock := s.lockMutation(r)
+	defer unlock()
 	if current, _, ok := s.currentUser(r); !ok || current.Role != "admin" {
 		fail(w, 401, "administrator sign in required")
 		return
@@ -79,8 +79,8 @@ func (s *Server) createInvite(w http.ResponseWriter, r *http.Request, actor User
 	jsonOut(w, 201, map[string]any{"invitation": viewInvite(invite), "url": s.cfg.PublicURL + "/#invite=" + token})
 }
 func (s *Server) deleteInvite(w http.ResponseWriter, r *http.Request, actor User) {
-	s.accessMu.Lock()
-	defer s.accessMu.Unlock()
+	unlock := s.lockMutation(r)
+	defer unlock()
 	if current, _, ok := s.currentUser(r); !ok || current.Role != "admin" {
 		fail(w, 401, "administrator sign in required")
 		return
@@ -173,8 +173,8 @@ func (s *Server) acceptInvite(w http.ResponseWriter, r *http.Request) {
 		fail(w, 400, "invalid password")
 		return
 	}
-	s.accessMu.Lock()
-	defer s.accessMu.Unlock()
+	unlock := s.lockMutation(r)
+	defer unlock()
 	var member User
 	err = s.store.update(func(st *State) error {
 		invite, ok := findInvite(*st, body.Token)

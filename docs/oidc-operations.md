@@ -125,4 +125,4 @@ Keycloak 采用固定示例版本 `26.8.0`，遵循[官方容器入门](https://
 
 完成一次绑定成功、未绑定拒绝、同名/邮箱不提权、单应用授权、退出、禁用/启用、重新绑定和 Server 重启后的重新登录验收。自动检查命令为 `make test`，以及构建后在 `web` 中分别运行普通和 `TUNNEL_TEST_STORAGE=sqlite` 的 `pnpm run test:e2e`。
 
-发布前本地执行 `make release-snapshot`，检查六平台 archive/checksum/文档完整性。本批复查中并行度 2 的快照重复出现 gzip 截断，暂将本地与发布流程的 GoReleaser 并行度降为 1；保留全文件解压、CRC 与 SHA-256 检查，不以重试代替校验。该措施不改变 Server 请求并发。
+发布前本地执行 `make release-snapshot`，检查六平台 archive/checksum/文档完整性。v2.18.3 在本环境串行模式仍出现 gzip 截断，因此固定 GoReleaser v2.17.1，连续两次独立检出快照全部通过。尚未证明上游根因，不能把串行模式视为修复；保留全文件解压、CRC 与 SHA-256 检查，不以重试代替校验。该措施不改变 Server 请求并发。

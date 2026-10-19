@@ -16,6 +16,8 @@
 - [用户组/邀请设计](docs/design/groups-invitations.md)与[操作手册](docs/groups-operations.md)：共享授权、一次性链接及设密。
 - [实施路线图](docs/roadmap.md)：已交付能力与后续数据库、SSO、HA 等工作。
 
+- [多管理员设计](docs/design/administrators.md)与[操作手册](docs/administrator-operations.md)：独立管理员、当前密码验证与最后恢复账号保护。
+
 ## 已实现
 
 - 控制台登录、管理员 / 成员两种角色、按整站或单独应用分配访问权限；支持直接编辑成员授权、自助改密和管理员重置成员密码。
@@ -333,5 +335,7 @@ CI 会先执行构建、Go race / vet、TypeScript 与真实 Agent 的 Playwrigh
 make release-check
 make release-snapshot
 ```
+
+本地和 CI 固定使用 GoReleaser v2.17.1，`make release-check` 检查版本与配置。
 
 快照包输出到 `dist/`，不创建远端标签、不上传 Release。生产包由 CI 的 `goreleaser release --clean` 生成。

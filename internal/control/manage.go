@@ -54,8 +54,8 @@ func (s *Server) updateService(w http.ResponseWriter, r *http.Request, u User) {
 		fail(w, 400, "name and HTTP/HTTPS origin required")
 		return
 	}
-	s.accessMu.Lock()
-	defer s.accessMu.Unlock()
+	unlock := s.lockMutation(r)
+	defer unlock()
 	var out Service
 	changed := false
 	err = s.store.update(func(st *State) error {
@@ -115,8 +115,8 @@ func (s *Server) updateUser(w http.ResponseWriter, r *http.Request, actor User) 
 	if !decode(w, r, &body) {
 		return
 	}
-	s.accessMu.Lock()
-	defer s.accessMu.Unlock()
+	unlock := s.lockMutation(r)
+	defer unlock()
 	if body.SiteIDs == nil {
 		body.SiteIDs = []string{}
 	}
@@ -175,8 +175,8 @@ func (s *Server) setPassword(w http.ResponseWriter, r *http.Request, actor User,
 		fail(w, 400, "invalid password")
 		return
 	}
-	s.accessMu.Lock()
-	defer s.accessMu.Unlock()
+	unlock := s.lockMutation(r)
+	defer unlock()
 	// Reject requests authorized before a concurrent password change/logout.
 	if _, _, ok := s.currentUser(r); !ok {
 		fail(w, 401, "sign in required")

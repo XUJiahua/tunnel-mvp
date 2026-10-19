@@ -73,8 +73,8 @@ func (s *Server) setDisabled(w http.ResponseWriter, r *http.Request, actor User)
 	s.mutateMember(w, r, actor, event, func(u *User) error { u.Disabled = *body.Disabled; return nil })
 }
 func (s *Server) mutateMember(w http.ResponseWriter, r *http.Request, actor User, event string, change func(*User) error) {
-	s.accessMu.Lock()
-	defer s.accessMu.Unlock()
+	unlock := s.lockMutation(r)
+	defer unlock()
 	if current, _, ok := s.currentUser(r); !ok || current.Role != "admin" {
 		fail(w, 401, "administrator sign in required")
 		return

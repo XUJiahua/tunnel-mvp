@@ -178,8 +178,8 @@ func (s *Server) callbackOIDC(w http.ResponseWriter, r *http.Request) {
 	}
 	// The binding and disabled flag are read after external IO under the same lock
 	// used by mutation/revocation. A concurrent disable/rebind cannot mint a session.
-	s.accessMu.Lock()
-	defer s.accessMu.Unlock()
+	unlock := s.lockMutation(r)
+	defer unlock()
 	s.oidc.mu.Lock()
 	blocked := false
 	for _, key := range []string{"sid:" + claims.SID, "sub:" + id.Subject} {

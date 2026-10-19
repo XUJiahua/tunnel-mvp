@@ -159,6 +159,9 @@ func (s *Server) Run(ctx context.Context) error {
 }
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/administrators", s.require(true, s.manageAdministrator))
+	mux.HandleFunc("PATCH /api/administrators/{id}", s.require(true, s.manageAdministrator))
+	mux.HandleFunc("DELETE /api/administrators/{id}", s.require(true, s.manageAdministrator))
 	mux.HandleFunc("GET /api/invitations", s.require(true, s.listInvites))
 	mux.HandleFunc("POST /api/invitations", s.require(true, s.createInvite))
 	mux.HandleFunc("DELETE /api/invitations/{id}", s.require(true, s.deleteInvite))
@@ -260,6 +263,13 @@ func (s *Server) Handler() http.Handler {
 }
 func (s *Server) require(admin bool, next func(http.ResponseWriter, *http.Request, User)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// All administrator mutations authenticate inside the same exclusive
+		// boundary as role/session revocation, including create operations.
+		if admin && r.Method != http.MethodGet && r.Method != http.MethodHead {
+			s.accessMu.Lock()
+			defer s.accessMu.Unlock()
+			r = r.WithContext(context.WithValue(r.Context(), mutationKey{}, true))
+		}
 		if r.Method == http.MethodGet || r.Method == http.MethodHead {
 			s.accessMu.RLock()
 			defer s.accessMu.RUnlock()
@@ -361,8 +371,8 @@ func (s *Server) createSite(w http.ResponseWriter, r *http.Request, u User) {
 	jsonOut(w, 201, map[string]any{"site": site, "token": token})
 }
 func (s *Server) deleteSite(w http.ResponseWriter, r *http.Request, u User) {
-	s.accessMu.Lock()
-	defer s.accessMu.Unlock()
+	unlock := s.lockMutation(r)
+	defer unlock()
 	oldServices := s.store.snapshot().Services
 	id := r.PathValue("id")
 	err := s.store.update(func(st *State) error {
@@ -415,8 +425,8 @@ func (s *Server) deleteSite(w http.ResponseWriter, r *http.Request, u User) {
 	jsonOut(w, 200, map[string]bool{"ok": true})
 }
 func (s *Server) rotateSite(w http.ResponseWriter, r *http.Request, u User) {
-	s.accessMu.Lock()
-	defer s.accessMu.Unlock()
+	unlock := s.lockMutation(r)
+	defer unlock()
 	id := r.PathValue("id")
 	token := randomID()
 	err := s.store.update(func(st *State) error {
@@ -481,8 +491,8 @@ func (s *Server) createService(w http.ResponseWriter, r *http.Request, u User) {
 	jsonOut(w, 201, svc)
 }
 func (s *Server) deleteService(w http.ResponseWriter, r *http.Request, u User) {
-	s.accessMu.Lock()
-	defer s.accessMu.Unlock()
+	unlock := s.lockMutation(r)
+	defer unlock()
 	id := r.PathValue("id")
 	err := s.store.update(func(st *State) error {
 		for i, v := range st.Services {
@@ -585,8 +595,8 @@ func (s *Server) createUser(w http.ResponseWriter, r *http.Request, u User) {
 	jsonOut(w, 201, publicUser(user))
 }
 func (s *Server) deleteUser(w http.ResponseWriter, r *http.Request, u User) {
-	s.accessMu.Lock()
-	defer s.accessMu.Unlock()
+	unlock := s.lockMutation(r)
+	defer unlock()
 	id := r.PathValue("id")
 	if id == u.ID {
 		fail(w, 400, "cannot delete yourself")

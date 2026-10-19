@@ -72,8 +72,8 @@ func (s *Server) saveGroup(w http.ResponseWriter, r *http.Request, actor User) {
 		fail(w, 400, "name must be 1–100 bytes")
 		return
 	}
-	s.accessMu.Lock()
-	defer s.accessMu.Unlock()
+	unlock := s.lockMutation(r)
+	defer unlock()
 	if current, _, ok := s.currentUser(r); !ok || current.Role != "admin" {
 		fail(w, 401, "administrator sign in required")
 		return
@@ -124,8 +124,8 @@ func (s *Server) saveGroup(w http.ResponseWriter, r *http.Request, actor User) {
 	jsonOut(w, code, out)
 }
 func (s *Server) deleteGroup(w http.ResponseWriter, r *http.Request, actor User) {
-	s.accessMu.Lock()
-	defer s.accessMu.Unlock()
+	unlock := s.lockMutation(r)
+	defer unlock()
 	if current, _, ok := s.currentUser(r); !ok || current.Role != "admin" {
 		fail(w, 401, "administrator sign in required")
 		return

@@ -53,8 +53,8 @@ func (s *Server) backchannelLogout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Serialize revocation with callback session issuance and proxy registration.
-	s.accessMu.Lock()
-	defer s.accessMu.Unlock()
+	unlock := s.lockMutation(r)
+	defer unlock()
 	s.oidc.mu.Lock()
 	for key, expires := range s.oidc.logoutReplay {
 		if !now.Before(expires) {
@@ -113,8 +113,8 @@ func (s *Server) backchannelLogout(w http.ResponseWriter, r *http.Request) {
 // client_id avoids retaining raw ID Tokens merely to construct an id_token_hint;
 // the IdP may ask the user to confirm ending its SSO session.
 func (s *Server) logoutIdentity(w http.ResponseWriter, r *http.Request, actor User) {
-	s.accessMu.Lock()
-	defer s.accessMu.Unlock()
+	unlock := s.lockMutation(r)
+	defer unlock()
 	_, key, ok := s.currentUser(r)
 	if !ok {
 		fail(w, 401, "sign in required")

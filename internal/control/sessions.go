@@ -66,8 +66,8 @@ func (s *Server) revokeSessionKeys(keys map[string]bool) {
 	s.cancelRequests(func(req liveRequest) bool { return keys[req.sessionKey] })
 }
 func (s *Server) deleteSession(w http.ResponseWriter, r *http.Request, actor User) {
-	s.accessMu.Lock()
-	defer s.accessMu.Unlock()
+	unlock := s.lockMutation(r)
+	defer unlock()
 	actor, current, ok := s.currentUser(r)
 	if !ok {
 		fail(w, 401, "sign in required")
