@@ -13,6 +13,7 @@ type serviceInput struct {
 	SiteID               string `json:"siteID"`
 	URL                  string `json:"url"`
 	CustomDomain         string `json:"customDomain"`
+	ConnectionMode       string `json:"connectionMode"`
 	HealthPath           string `json:"healthPath"`
 	HealthMethod         string `json:"healthMethod"`
 	HealthExpectedStatus int    `json:"healthExpectedStatus"`
@@ -47,7 +48,7 @@ func (s *Server) bulkCreate(w http.ResponseWriter, r *http.Request, actor User) 
 			found := false
 			for _, site := range st.Sites {
 				if site.ID == in.SiteID && canManage(actor, site.OrganizationID, "applications:manage") {
-					svc := Service{HealthPath: in.HealthPath, HealthMethod: in.HealthMethod, HealthExpectedStatus: in.HealthExpectedStatus, ID: randomID()[:16], OrganizationID: site.OrganizationID, Name: in.Name, SiteID: site.ID, URL: target.String(), CustomDomain: in.CustomDomain}
+					svc := Service{ConnectionMode: in.ConnectionMode, HealthPath: in.HealthPath, HealthMethod: in.HealthMethod, HealthExpectedStatus: in.HealthExpectedStatus, ID: randomID()[:16], OrganizationID: site.OrganizationID, Name: in.Name, SiteID: site.ID, URL: target.String(), CustomDomain: in.CustomDomain}
 					st.Services = append(st.Services, svc)
 					out = append(out, svc)
 					found = true

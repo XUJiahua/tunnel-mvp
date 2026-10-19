@@ -63,6 +63,7 @@ func (s *Server) revokeSessionKeys(keys map[string]bool) {
 	}
 	s.auth.clean(time.Now())
 	s.auth.mu.Unlock()
+	s.pruneSessionPools()
 	s.cancelRequests(func(req liveRequest) bool { return keys[req.sessionKey] })
 }
 func (s *Server) deleteSession(w http.ResponseWriter, r *http.Request, actor User) {

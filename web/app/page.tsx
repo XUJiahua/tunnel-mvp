@@ -44,6 +44,7 @@ type Site = {
   createdAt: string;
 };
 type Service = {
+  connectionMode?: string;
   organizationID?: string;
   accessible?: boolean;
   customDomain?: string;

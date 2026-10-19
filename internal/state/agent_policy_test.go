@@ -40,6 +40,9 @@ func TestAgentPolicyPersistenceAndV7Upgrade(t *testing.T) {
 	dir := t.TempDir()
 	s := agentSample(t)
 	r := mustOpen(t, dir, SQLite, s)
+	if _, e := r.disk.(*sqliteBackend).db.Exec("ALTER TABLE services DROP COLUMN connection_mode"); e != nil {
+		t.Fatal(e)
+	}
 	if _, e := r.disk.(*sqliteBackend).db.Exec("PRAGMA user_version=7"); e != nil {
 		t.Fatal(e)
 	}

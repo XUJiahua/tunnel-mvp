@@ -353,3 +353,5 @@ Agent 多实例：[设计](docs/design/agent-instances.md) · [登记、切换�
 Agent 远程收紧策略：[设计](docs/design/agent-remote-policy.md) · [配置与故障操作](docs/agent-policy-operations.md)。
 
 Agent 签名升级：[设计](docs/design/agent-updates.md) · [发布、主机配置与回滚](docs/agent-update-operations.md)。
+
+连接身份隔离与容量：[设计](docs/design/session-pools.md) · [操作](docs/connection-mode-operations.md) · [实测报告](docs/capacity-report.md)。

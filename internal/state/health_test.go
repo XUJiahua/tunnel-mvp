@@ -15,7 +15,7 @@ func TestHealthValidationAndV5Upgrade(t *testing.T) {
 	initial := sample(t)
 	r := mustOpen(t, dir, SQLite, initial)
 	db := r.disk.(*sqliteBackend).db
-	for _, sql := range []string{"DROP TABLE agents", "ALTER TABLE sites DROP COLUMN legacy_disabled", "ALTER TABLE services DROP COLUMN health_path", "ALTER TABLE services DROP COLUMN health_method", "ALTER TABLE services DROP COLUMN health_expected_status", "PRAGMA user_version=5"} {
+	for _, sql := range []string{"ALTER TABLE services DROP COLUMN connection_mode", "DROP TABLE agents", "ALTER TABLE sites DROP COLUMN legacy_disabled", "ALTER TABLE services DROP COLUMN health_path", "ALTER TABLE services DROP COLUMN health_method", "ALTER TABLE services DROP COLUMN health_expected_status", "PRAGMA user_version=5"} {
 		if _, err := db.Exec(sql); err != nil {
 			t.Fatal(err)
 		}

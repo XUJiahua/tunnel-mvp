@@ -55,6 +55,7 @@ func (s *Server) revokeUser(id string) {
 	}
 	s.auth.clean(time.Now())
 	s.auth.mu.Unlock()
+	s.pruneSessionPools()
 	s.cancelRequests(func(r liveRequest) bool { return r.userID == id })
 }
 func (s *Server) revokeService(id string) {
@@ -70,6 +71,7 @@ func (s *Server) revokeService(id string) {
 		}
 	}
 	s.auth.mu.Unlock()
+	s.pruneSessionPools()
 	s.cancelRequests(func(r liveRequest) bool { return r.serviceID == id })
 	s.dropTransport(id)
 	s.monitorMu.Lock()
@@ -84,6 +86,7 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 	delete(s.auth.sessions, key)
 	s.auth.clean(time.Now())
 	s.auth.mu.Unlock()
+	s.pruneSessionPools()
 	s.cancelRequests(func(req liveRequest) bool { return req.sessionKey == key })
 	s.clearConsoleCookie(w)
 	if ok {

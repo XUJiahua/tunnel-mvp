@@ -7,6 +7,7 @@ type Site = { id: string; name: string };
 type Service = {
   customDomain?: string;
   healthPath?: string;
+  connectionMode?: string;
   healthMethod?: string;
   healthExpectedStatus?: number;
   id: string;
@@ -130,6 +131,7 @@ export function ResourceEditor({
           name: data.get("name"),
           url: data.get("url"),
           siteID: data.get("siteID"),
+          connectionMode: data.get("connectionMode"),
           healthPath: data.get("healthPath"),
           healthMethod: data.get("healthMethod"),
           healthExpectedStatus: Number(data.get("healthExpectedStatus")),
@@ -199,6 +201,21 @@ export function ResourceEditor({
             </label>
             <fieldset className="grants">
               <legend>业务健康检查</legend>
+              <label className="field">
+                <span>上游连接模式</span>
+                <select
+                  aria-label="上游连接模式"
+                  name="connectionMode"
+                  defaultValue={editor.service.connectionMode || ""}
+                >
+                  <option value="">按应用共享连接池</option>
+                  <option value="session">每个登录会话独立串行连接</option>
+                </select>
+                <small>
+                  连接缓存身份的应用可选独立模式。长连接会占用该会话的通道，其他请求需要等待；实际
+                  NTLM/Kerberos 仍需目标平台验收。
+                </small>
+              </label>
               <label className="field">
                 <span>健康检查相对路径</span>
                 <input

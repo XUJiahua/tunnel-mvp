@@ -1,0 +1,139 @@
+{
+  "generatedAt": "2026-10-19T17:43:28.414Z",
+  "storage": "sqlite",
+  "sourceCommit": "e40c6d1b2a4ddd5bc3442b552c5ab9f4756f4cca",
+  "workingTreeDirty": true,
+  "environment": {
+    "platform": "linux",
+    "arch": "x64",
+    "cpuModel": "AMD EPYC 9V74 80-Core Processor",
+    "hostLogicalCPUs": 9,
+    "cpuQuota": "800000 100000",
+    "hostMemoryBytes": 10451439616,
+    "go": "go version go1.27.2 linux/amd64",
+    "node": "v24.19.0"
+  },
+  "topology": "Separate native Server and two Agent processes; all traffic on loopback, one synthetic upstream; TLS disabled for loopback only",
+  "baseline": {
+    "server": {
+      "rssBytes": 20381696,
+      "fileDescriptors": 14
+    },
+    "agents": [
+      {
+        "rssBytes": 15319040,
+        "fileDescriptors": 7
+      },
+      {
+        "rssBytes": 15515648,
+        "fileDescriptors": 7
+      }
+    ]
+  },
+  "peak": {
+    "server": {
+      "rssBytes": 33796096,
+      "fileDescriptors": 53
+    },
+    "agent1": {
+      "rssBytes": 22949888,
+      "fileDescriptors": 22
+    },
+    "agent2": {
+      "rssBytes": 22474752,
+      "fileDescriptors": 23
+    }
+  },
+  "workloads": [
+    {
+      "name": "http-4KiB",
+      "concurrency": 1,
+      "requests": 600,
+      "errors": 0,
+      "durationMs": 1405.01929,
+      "requestsPerSecond": 427.0404002780631,
+      "mibPerSecond": 1.668126563586184,
+      "p50Ms": 2.2128999999999905,
+      "p95Ms": 3.2114259999998467,
+      "p99Ms": 6.093499999999949
+    },
+    {
+      "name": "http-4KiB",
+      "concurrency": 8,
+      "requests": 600,
+      "errors": 0,
+      "durationMs": 871.5124899999996,
+      "requestsPerSecond": 688.4582916304507,
+      "mibPerSecond": 2.689290201681448,
+      "p50Ms": 11.436929999999847,
+      "p95Ms": 13.866082000000006,
+      "p99Ms": 14.784175000000232
+    },
+    {
+      "name": "http-4KiB",
+      "concurrency": 32,
+      "requests": 600,
+      "errors": 0,
+      "durationMs": 850.2367759999997,
+      "requestsPerSecond": 705.6857771111047,
+      "mibPerSecond": 2.7565850668402527,
+      "p50Ms": 44.982575,
+      "p95Ms": 51.89395700000023,
+      "p99Ms": 52.981460999999854
+    },
+    {
+      "name": "upload-1MiB",
+      "concurrency": 4,
+      "requests": 32,
+      "errors": 0,
+      "durationMs": 94.15434300000015,
+      "requestsPerSecond": 339.86748757834727,
+      "mibPerSecond": 339.86748757834727,
+      "p50Ms": 11.751874999999927,
+      "p95Ms": 16.06240200000002,
+      "p99Ms": 16.785507000000052
+    },
+    {
+      "name": "http-with-16WS-16SSE",
+      "concurrency": 16,
+      "requests": 600,
+      "errors": 0,
+      "durationMs": 903.0925120000002,
+      "requestsPerSecond": 664.3837613836841,
+      "mibPerSecond": 2.595249067905016,
+      "p50Ms": 23.73064499999964,
+      "p95Ms": 29.903314000000137,
+      "p99Ms": 32.43694899999991
+    },
+    {
+      "name": "http-one-surviving-Agent",
+      "concurrency": 8,
+      "requests": 300,
+      "errors": 0,
+      "durationMs": 422.0880019999995,
+      "requestsPerSecond": 710.7522568243965,
+      "mibPerSecond": 2.7763760032202986,
+      "p50Ms": 10.76789699999972,
+      "p95Ms": 15.286791999999878,
+      "p99Ms": 19.178659000000152
+    }
+  ],
+  "streams": {
+    "webSockets": 16,
+    "sseStreams": 16,
+    "durationMs": 2905.116876,
+    "webSocketMessages": 2101,
+    "sseChunks": 345,
+    "errors": 0
+  },
+  "failover": {
+    "disconnectDetectionMs": 3.3993340000006356,
+    "reconnectMs": 55.329320000000735
+  },
+  "limitations": [
+    "Local synthetic workload, not production sizing or a saturation limit",
+    "Shared HTTP pool mode; session-isolated mode is validated separately",
+    "RSS/FD peaks sampled every 100ms; browser and upstream resources excluded",
+    "SSE chunks are read events and may coalesce multiple SSE messages"
+  ]
+}

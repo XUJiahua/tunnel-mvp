@@ -44,7 +44,7 @@ func TestAgentsPersistenceBackupAndV6Upgrade(t *testing.T) {
 	dir := t.TempDir()
 	s := sample(t)
 	r := mustOpen(t, dir, SQLite, s)
-	for _, q := range []string{"DROP TABLE agents", "ALTER TABLE sites DROP COLUMN legacy_disabled", "PRAGMA user_version=6"} {
+	for _, q := range []string{"ALTER TABLE services DROP COLUMN connection_mode", "DROP TABLE agents", "ALTER TABLE sites DROP COLUMN legacy_disabled", "PRAGMA user_version=6"} {
 		if _, e := r.disk.(*sqliteBackend).db.Exec(q); e != nil {
 			t.Fatal(e)
 		}

@@ -16,35 +16,92 @@ import (
 )
 
 type pooledTransport struct {
-	service   Service
-	transport *http.Transport
+	sessionKey string
+	lastUsed   time.Time
+	service    Service
+	transport  *http.Transport
 }
 type counters struct{ requests, errors, probes, historyErrors, auditIndexErrors atomic.Uint64 }
 
 // Pool keys are immutable application identities; different sites and targets
 // never share an HTTP connection. Every request still passes authorization.
-func (s *Server) serviceTransport(svc Service) *http.Transport {
+func (s *Server) serviceTransport(svc Service, sessions ...string) *http.Transport {
+	session := ""
+	key := svc.ID
+	if svc.ConnectionMode == "session" {
+		session = "probe"
+		if len(sessions) > 0 && sessions[0] != "" {
+			session = sessions[0]
+		}
+		key += "~" + session
+	}
 	s.poolMu.Lock()
 	defer s.poolMu.Unlock()
-	if p, ok := s.pools[svc.ID]; ok && p.service == svc {
+	if p, ok := s.pools[key]; ok && p.service == svc {
+		p.lastUsed = time.Now()
+		s.pools[key] = p
 		return p.transport
 	}
-	if p, ok := s.pools[svc.ID]; ok {
+	if p, ok := s.pools[key]; ok {
 		p.transport.CloseIdleConnections()
+	}
+	if session != "" {
+		count := 0
+		oldestKey := ""
+		var oldest time.Time
+		for k, p := range s.pools {
+			if p.sessionKey != "" {
+				count++
+				if oldestKey == "" || p.lastUsed.Before(oldest) {
+					oldestKey = k
+					oldest = p.lastUsed
+				}
+			}
+		}
+		if count >= 1024 {
+			s.pools[oldestKey].transport.CloseIdleConnections()
+			delete(s.pools, oldestKey)
+		}
 	}
 	t := s.transport(svc.SiteID, svc.ID)
 	t.MaxIdleConns = 32
 	t.MaxIdleConnsPerHost = 16
 	t.MaxConnsPerHost = 64
-	s.pools[svc.ID] = pooledTransport{svc, t}
+	if session != "" {
+		t.MaxIdleConns = 1
+		t.MaxIdleConnsPerHost = 1
+		t.MaxConnsPerHost = 1
+	}
+	s.pools[key] = pooledTransport{service: svc, transport: t, sessionKey: session, lastUsed: time.Now()}
 	return t
 }
 func (s *Server) dropTransport(id string) {
 	s.poolMu.Lock()
 	defer s.poolMu.Unlock()
-	if p, ok := s.pools[id]; ok {
-		p.transport.CloseIdleConnections()
-		delete(s.pools, id)
+	for key, p := range s.pools {
+		if p.service.ID == id {
+			p.transport.CloseIdleConnections()
+			delete(s.pools, key)
+		}
+	}
+}
+func (s *Server) pruneSessionPools() {
+	s.auth.mu.Lock()
+	active := map[string]bool{}
+	now := time.Now()
+	for key, sess := range s.auth.sessions {
+		if now.Before(sess.Expires) {
+			active[key] = true
+		}
+	}
+	s.auth.mu.Unlock()
+	s.poolMu.Lock()
+	defer s.poolMu.Unlock()
+	for key, p := range s.pools {
+		if p.sessionKey != "" && p.sessionKey != "probe" && !active[p.sessionKey] {
+			p.transport.CloseIdleConnections()
+			delete(s.pools, key)
+		}
 	}
 }
 func (s *Server) dropSiteTransports(id string) {
@@ -80,6 +137,7 @@ func (s *Server) startBackground() {
 				s.auth.mu.Lock()
 				s.auth.clean(time.Now())
 				s.auth.mu.Unlock()
+				s.pruneSessionPools()
 			case <-tick:
 				s.probeAll(ctx)
 			}
@@ -169,6 +227,20 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request, _ User) {
 	s.liveMu.Lock()
 	active := len(s.live)
 	s.liveMu.Unlock()
+	s.poolMu.Lock()
+	shared, isolated, probe := 0, 0, 0
+	for _, p := range s.pools {
+		if p.sessionKey == "" {
+			shared++
+		} else if p.sessionKey == "probe" {
+			probe++
+		} else {
+			isolated++
+		}
+	}
+	s.poolMu.Unlock()
+	fmt.Fprint(w, "# HELP tunnel_http_pools Current HTTP pool entries.\n# TYPE tunnel_http_pools gauge\n")
+	fmt.Fprintf(w, "tunnel_http_pools{mode=\"shared\"} %d\ntunnel_http_pools{mode=\"session\"} %d\ntunnel_http_pools{mode=\"probe\"} %d\n", shared, isolated, probe)
 	metric(w, "tunnel_active_requests", "Active proxy requests and manual probes.", "gauge", active)
 	fmt.Fprint(w, "# HELP tunnel_site_online Agent tunnel connected.\n# TYPE tunnel_site_online gauge\n")
 	fmt.Fprint(w, "# HELP tunnel_site_agents Connected Agent instances.\n# TYPE tunnel_site_agents gauge\n")

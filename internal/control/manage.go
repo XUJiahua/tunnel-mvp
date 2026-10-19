@@ -65,6 +65,7 @@ func (s *Server) updateService(w http.ResponseWriter, r *http.Request, u User) {
 		Name                 string  `json:"name"`
 		SiteID               *string `json:"siteID"`
 		CustomDomain         *string `json:"customDomain"`
+		ConnectionMode       *string `json:"connectionMode"`
 		HealthPath           *string `json:"healthPath"`
 		HealthMethod         *string `json:"healthMethod"`
 		HealthExpectedStatus *int    `json:"healthExpectedStatus"`
@@ -113,6 +114,10 @@ func (s *Server) updateService(w http.ResponseWriter, r *http.Request, u User) {
 						svc.CustomDomain = domain
 						changed = true
 					}
+				}
+				if body.ConnectionMode != nil && *body.ConnectionMode != svc.ConnectionMode {
+					changed = true
+					svc.ConnectionMode = *body.ConnectionMode
 				}
 				beforePath, beforeMethod, beforeStatus := svc.HealthPath, svc.HealthMethod, svc.HealthExpectedStatus
 				if body.HealthPath != nil {

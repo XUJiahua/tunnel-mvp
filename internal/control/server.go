@@ -588,6 +588,7 @@ func (s *Server) createService(w http.ResponseWriter, r *http.Request, u User) {
 		SiteID               string `json:"siteID"`
 		URL                  string `json:"url"`
 		CustomDomain         string `json:"customDomain"`
+		ConnectionMode       string `json:"connectionMode"`
 		HealthPath           string `json:"healthPath"`
 		HealthMethod         string `json:"healthMethod"`
 		HealthExpectedStatus int    `json:"healthExpectedStatus"`
@@ -609,7 +610,7 @@ func (s *Server) createService(w http.ResponseWriter, r *http.Request, u User) {
 		fail(w, 400, err.Error())
 		return
 	}
-	svc := Service{HealthPath: b.HealthPath, HealthMethod: b.HealthMethod, HealthExpectedStatus: b.HealthExpectedStatus, CustomDomain: b.CustomDomain, ID: randomID()[:16], Name: b.Name, SiteID: b.SiteID, URL: target.String()}
+	svc := Service{ConnectionMode: b.ConnectionMode, HealthPath: b.HealthPath, HealthMethod: b.HealthMethod, HealthExpectedStatus: b.HealthExpectedStatus, CustomDomain: b.CustomDomain, ID: randomID()[:16], Name: b.Name, SiteID: b.SiteID, URL: target.String()}
 	err = s.store.update(func(st *State) error {
 		for _, site := range st.Sites {
 			if site.ID == b.SiteID && canManage(u, site.OrganizationID, "applications:manage") {

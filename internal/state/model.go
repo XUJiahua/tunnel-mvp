@@ -43,6 +43,7 @@ type Site struct {
 	CreatedAt      time.Time `json:"createdAt"`
 }
 type Service struct {
+	ConnectionMode       string `json:"connectionMode,omitempty"`
 	HealthPath           string `json:"healthPath,omitempty"`
 	HealthMethod         string `json:"healthMethod,omitempty"`
 	HealthExpectedStatus int    `json:"healthExpectedStatus,omitempty"`
@@ -142,6 +143,9 @@ func Validate(s *State) error {
 		sites[v.ID] = true
 	}
 	for _, v := range s.Services {
+		if v.ConnectionMode != "" && v.ConnectionMode != "session" {
+			return fmt.Errorf("connectionMode must be empty or session")
+		}
 		_, err := ApplicationURL(v.URL)
 		if !resourceID.MatchString(v.ID) || services[v.ID] || !validName(v.Name) || !sites[v.SiteID] || err != nil || ValidateHealth(v) != nil || v.CustomDomain != "" && (!ValidCustomDomain(v.CustomDomain) || domains[v.CustomDomain]) {
 			return fmt.Errorf("invalid application or site reference %q", v.ID)

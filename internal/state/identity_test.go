@@ -31,7 +31,7 @@ func TestIdentityPersistenceAndBackup(t *testing.T) {
 			raw, _ := os.ReadFile(backup)
 			var b Backup
 			_ = json.Unmarshal(raw, &b)
-			if b.Version != 8 {
+			if b.Version != 9 {
 				t.Fatal("identity backup must be versioned against old readers")
 			}
 			for _, target := range []string{JSON, SQLite} {
@@ -80,7 +80,7 @@ func legacySQLite(t *testing.T, dir string, invalid bool) State {
 	s := mustOpen(t, dir, SQLite, initial)
 	db := s.disk.(*sqliteBackend).db
 	// Produce the actual v1 table layout and version, not just a changed pragma.
-	for _, statement := range []string{"DROP TABLE agents", "ALTER TABLE sites DROP COLUMN legacy_disabled", "ALTER TABLE services DROP COLUMN health_path", "ALTER TABLE services DROP COLUMN health_method", "ALTER TABLE services DROP COLUMN health_expected_status", "ALTER TABLE services DROP COLUMN custom_domain", "DROP TABLE roles", "DROP TABLE organizations", "ALTER TABLE users DROP COLUMN organization_id", "ALTER TABLE users DROP COLUMN role_id", "ALTER TABLE sites DROP COLUMN organization_id", "ALTER TABLE services DROP COLUMN organization_id", "DROP TABLE groups", "DROP TABLE invites", "DROP INDEX users_identity", "ALTER TABLE users DROP COLUMN disabled", "ALTER TABLE users DROP COLUMN oidc_issuer", "ALTER TABLE users DROP COLUMN oidc_subject", "PRAGMA user_version=1"} {
+	for _, statement := range []string{"ALTER TABLE services DROP COLUMN connection_mode", "DROP TABLE agents", "ALTER TABLE sites DROP COLUMN legacy_disabled", "ALTER TABLE services DROP COLUMN health_path", "ALTER TABLE services DROP COLUMN health_method", "ALTER TABLE services DROP COLUMN health_expected_status", "ALTER TABLE services DROP COLUMN custom_domain", "DROP TABLE roles", "DROP TABLE organizations", "ALTER TABLE users DROP COLUMN organization_id", "ALTER TABLE users DROP COLUMN role_id", "ALTER TABLE sites DROP COLUMN organization_id", "ALTER TABLE services DROP COLUMN organization_id", "DROP TABLE groups", "DROP TABLE invites", "DROP INDEX users_identity", "ALTER TABLE users DROP COLUMN disabled", "ALTER TABLE users DROP COLUMN oidc_issuer", "ALTER TABLE users DROP COLUMN oidc_subject", "PRAGMA user_version=1"} {
 		if _, err := db.Exec(statement); err != nil {
 			t.Fatal(err)
 		}

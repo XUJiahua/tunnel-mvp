@@ -132,7 +132,7 @@ func (s *Server) gateway(w http.ResponseWriter, r *http.Request) {
 	upstreamOrigin := *target
 	upstreamOrigin.Path = ""
 	upstreamOrigin.RawPath = ""
-	transport := s.serviceTransport(svc)
+	transport := s.serviceTransport(svc, g.SessionKey)
 	s.accessMu.RUnlock()
 	locked = false
 	s.stats.requests.Add(1)
