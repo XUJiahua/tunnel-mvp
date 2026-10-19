@@ -26,6 +26,8 @@
 
 - [审计索引设计](docs/design/audit-index.md)与[查询手册](docs/audit-operations.md)：全部保留文件、过滤和分页；[本地依赖补丁](docs/third-party-dependencies.md)。
 
+- [应用 OIDC 示例](examples/oidc-app/README.md)、[设计](docs/design/application-oidc.md)与[接入手册](docs/application-oidc-operations.md)：独立应用 client、路径挂载、真实 Keycloak SSO 和退出边界。
+
 ## 已实现
 
 - 控制台登录、管理员 / 成员两种角色、按整站或单独应用分配访问权限；支持直接编辑成员授权、自助改密和管理员重置成员密码。

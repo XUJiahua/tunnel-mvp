@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, execFileSync, type ChildProcess } from "node:child_process";
 import { createHash, createHmac, randomBytes } from "node:crypto";
 import {
   mkdirSync,
@@ -28,9 +28,13 @@ const issuer = `${idp}/realms/${realm}`;
 const password = "Fixture-" + randomBytes(16).toString("hex");
 const clientSecret = randomBytes(24).toString("hex");
 const syncSecret = randomBytes(24).toString("hex");
+const appSecret = randomBytes(24).toString("hex");
 const subject = "2869bcad-a6aa-4ce1-84fc-4289cc356000";
 let dir: string, importPath: string;
-let keycloak: ChildProcess, server: ChildProcess, agent: ChildProcess;
+let keycloak: ChildProcess,
+  server: ChildProcess,
+  agent: ChildProcess,
+  oidcApp: ChildProcess;
 let upstream: http.Server;
 let adminCookie = "";
 function start(
@@ -187,6 +191,17 @@ test.beforeAll(async () => {
           standardFlowEnabled: false,
           directAccessGrantsEnabled: false,
         },
+        {
+          clientId: "tunnel-app-e2e",
+          enabled: true,
+          protocol: "openid-connect",
+          publicClient: false,
+          secret: appSecret,
+          standardFlowEnabled: true,
+          directAccessGrantsEnabled: false,
+          redirectUris: [],
+          attributes: { "pkce.code.challenge.method": "S256" },
+        },
       ],
       users: [
         {
@@ -316,6 +331,7 @@ test.beforeAll(async () => {
   await new Promise<void>((done) => upstream.listen(19882, "127.0.0.1", done));
 });
 test.afterAll(async () => {
+  await stop(oidcApp);
   await stop(agent);
   await stop(server);
   await stop(keycloak);
@@ -325,7 +341,12 @@ test.afterAll(async () => {
     if (test.info().status !== test.info().expectedStatus) {
       const target = test.info().outputPath("diagnostics");
       mkdirSync(target, { recursive: true });
-      for (const name of ["keycloak.log", "control.log", "agent.log"]) {
+      for (const name of [
+        "keycloak.log",
+        "control.log",
+        "agent.log",
+        "oidc-app.log",
+      ]) {
         const source = resolve(dir, name);
         if (existsSync(source)) copyFileSync(source, resolve(target, name));
       }
@@ -356,10 +377,79 @@ test("real Keycloak OTP, authorization, session revocation and back-channel logo
     siteID: site.result.site.id,
     url: "http://127.0.0.1:19882",
   });
+  const demo = await api("/services", "POST", {
+    name: "OIDC upstream example",
+    siteID: site.result.site.id,
+    url: "http://127.0.0.1:19883/demo/",
+    healthPath: "healthz",
+    healthMethod: "GET",
+    healthExpectedStatus: 200,
+  });
+  const demoURL = `http://${demo.result.id}.apps.localhost:19880/demo/`;
+  const appAdminToken = await keycloakAdminToken(),
+    clientList = await fetch(
+      idp + `/admin/realms/${realm}/clients?clientId=tunnel-app-e2e`,
+      { headers: { Authorization: "Bearer " + appAdminToken } },
+    );
+  expect(clientList.status).toBe(200);
+  const demoClient = (await clientList.json())[0];
+  const configured = await fetch(
+    idp + `/admin/realms/${realm}/clients/${demoClient.id}`,
+    {
+      method: "PUT",
+      headers: {
+        Authorization: "Bearer " + appAdminToken,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        redirectUris: [demoURL + "auth/callback"],
+        attributes: { "pkce.code.challenge.method": "S256" },
+      }),
+    },
+  );
+  expect(configured.status).toBe(204);
+  const exampleBinary = resolve(dir, "oidc-app");
+  execFileSync(
+    process.env.GO_BINARY || "go",
+    [
+      "-C",
+      resolve(process.cwd(), "../examples/oidc-app"),
+      "build",
+      "-trimpath",
+      "-o",
+      exampleBinary,
+      ".",
+    ],
+    { stdio: "pipe" },
+  );
+  oidcApp = start(
+    exampleBinary,
+    [
+      "--listen",
+      "127.0.0.1:19883",
+      "--public-url",
+      demoURL,
+      "--issuer",
+      issuer,
+      "--client-id",
+      "tunnel-app-e2e",
+    ],
+    { OIDC_APP_CLIENT_SECRET: appSecret },
+    "oidc-app",
+  );
+  await expect
+    .poll(async () => {
+      try {
+        return (await fetch("http://127.0.0.1:19883/demo/healthz")).ok;
+      } catch {
+        return false;
+      }
+    })
+    .toBe(true);
   await api("/users", "POST", {
     username: "keycloak-member",
     oidcSubject: subject,
-    serviceIDs: [app.result.id],
+    serviceIDs: [app.result.id, demo.result.id],
   });
   const agentConfig = resolve(dir, "agent.json");
   writeFileSync(
@@ -367,7 +457,7 @@ test("real Keycloak OTP, authorization, session revocation and back-channel logo
     JSON.stringify({
       serverURL: control,
       siteID: site.result.site.id,
-      allow: [{ cidr: "127.0.0.0/8", ports: [19882] }],
+      allow: [{ cidr: "127.0.0.0/8", ports: [19882, 19883] }],
     }),
   );
   agent = start(
@@ -400,9 +490,51 @@ test("real Keycloak OTP, authorization, session revocation and back-channel logo
     await expect(member.getByRole("button", { name: "访问权限" })).toHaveCount(
       0,
     );
+    const demoLaunch = await member.request.post(
+      control + `/api/services/${demo.result.id}/launch`,
+      { headers: { Origin: control } },
+    );
+    expect(demoLaunch.status()).toBe(200);
+    const demoPage = await context.newPage();
+    await demoPage.goto((await demoLaunch.json()).url);
+    await expect(
+      demoPage.getByRole("heading", {
+        name: "OIDC demo application",
+        exact: true,
+      }),
+    ).toBeVisible();
+    await expect(demoPage.getByTestId("application-user")).toHaveText(
+      "operator",
+    );
+    expect(demoPage.url()).toBe(demoURL);
+    expect(await demoPage.locator("body").textContent()).not.toContain(
+      "access_token",
+    );
+    await demoPage
+      .getByRole("button", {
+        name: "Sign out of this application",
+        exact: true,
+      })
+      .click();
+    await expect(
+      demoPage.getByText("You signed out of this application.", {
+        exact: true,
+      }),
+    ).toBeVisible();
+    expect((await member.request.get(control + "/api/me")).status()).toBe(200);
+    await demoPage
+      .getByRole("link", { name: "Sign in again", exact: true })
+      .click();
+    await expect(demoPage.getByTestId("application-user")).toHaveText(
+      "operator",
+    );
     await member.getByRole("button", { name: /^应用/ }).click();
     const popup = member.waitForEvent("popup");
-    await member.getByRole("button", { name: "打开", exact: true }).click();
+    await member
+      .getByRole("row")
+      .filter({ hasText: "Real IdP app" })
+      .getByRole("button", { name: "打开", exact: true })
+      .click();
     const appPage = await popup;
     await expect(appPage.getByRole("heading")).toHaveText(
       "Real Keycloak authenticated application",
@@ -572,6 +704,15 @@ test("real Keycloak OTP, authorization, session revocation and back-channel logo
         ),
       )
       .toBe(true);
+    const freshDemoLaunch = await member.request.post(
+      control + `/api/services/${demo.result.id}/launch`,
+      { headers: { Origin: control } },
+    );
+    expect(freshDemoLaunch.status()).toBe(200);
+    await demoPage.goto((await freshDemoLaunch.json()).url);
+    await expect(demoPage.getByTestId("application-user")).toHaveText(
+      "operator",
+    );
     const disableToken = await keycloakAdminToken();
     const disable = await fetch(
       idp + `/admin/realms/${realm}/users/${subject}`,
@@ -601,6 +742,9 @@ test("real Keycloak OTP, authorization, session revocation and back-channel logo
     expect(await appPage.evaluate(async () => (await fetch("/")).status)).toBe(
       401,
     );
+    // The example intentionally has CSP connect-src 'none'; verify a real
+    // browser navigation reaches the gateway's revoked-access response.
+    expect((await demoPage.goto(demoURL))?.status()).toBe(401);
     const metrics = await fetch(control + "/api/metrics", {
       headers: { Cookie: adminCookie },
     });
