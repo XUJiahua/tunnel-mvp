@@ -1,0 +1,7 @@
+{
+  "listen": ":8080",
+  "publicURL": "https://console.example.com",
+  "accessURL": "https://access.example.net",
+  "dataDir": "/var/lib/tunnel",
+  "adminUsername": "admin"
+}

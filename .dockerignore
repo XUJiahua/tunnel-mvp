@@ -1,0 +1,9 @@
+.git
+web/node_modules
+web/.next
+web/out
+internal/web/dist
+bin
+data
+*.local.json
+.env

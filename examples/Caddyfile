@@ -1,0 +1,10 @@
+console.example.com {
+    reverse_proxy 127.0.0.1:8080
+}
+
+# Supply your own wildcard certificate, or configure a Caddy DNS provider
+# module for ACME DNS-01. A standard Caddy build cannot auto-issue this wildcard.
+*.access.example.net {
+    tls /etc/caddy/certs/access.crt /etc/caddy/certs/access.key
+    reverse_proxy 127.0.0.1:8080
+}

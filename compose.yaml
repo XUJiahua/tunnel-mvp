@@ -1,0 +1,13 @@
+services:
+  control:
+    build: .
+    command: ["server", "-config", "/app/server.json"]
+    ports: ["127.0.0.1:8080:8080"]
+    environment:
+      TUNNEL_ADMIN_PASSWORD: ${TUNNEL_ADMIN_PASSWORD:?Set a 12-72 byte bootstrap password}
+    volumes:
+      - ./examples/server.production.json:/app/server.json:ro
+      - tunnel-data:/var/lib/tunnel
+    restart: unless-stopped
+volumes:
+  tunnel-data:

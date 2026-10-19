@@ -1,0 +1,7 @@
+{
+  "listen": ":8080",
+  "publicURL": "http://localhost:8080",
+  "accessURL": "http://apps.localhost:8080",
+  "dataDir": "data",
+  "adminUsername": "admin"
+}
