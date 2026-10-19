@@ -116,12 +116,16 @@ func (s *Server) Close() {
 	}
 }
 func (s *Server) audit(event, user, site, resource string, fields ...map[string]any) {
+	org, owned := auditOrganization(s.store.snapshot(), user, site, resource)
 	s.auditMu.Lock()
 	defer s.auditMu.Unlock()
 	if err := s.rotateAudit(); err != nil {
 		s.logRotationError(err)
 	}
 	entry := map[string]any{"time": time.Now().UTC(), "event": event, "user": user, "siteID": site, "resourceID": resource}
+	if owned {
+		entry["organizationID"] = org
+	}
 	for _, values := range fields {
 		for key, value := range values {
 			entry[key] = value
@@ -159,6 +163,16 @@ func (s *Server) Run(ctx context.Context) error {
 }
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/group-members", s.require(false, s.groupMembers))
+	mux.HandleFunc("GET /api/organizations", s.require(false, s.listOrganizations))
+	mux.HandleFunc("POST /api/organizations", s.require(true, s.manageOrganization))
+	mux.HandleFunc("PATCH /api/organizations/{id}", s.require(true, s.manageOrganization))
+	mux.HandleFunc("DELETE /api/organizations/{id}", s.require(true, s.manageOrganization))
+	mux.HandleFunc("GET /api/roles", s.require(false, s.listRoles))
+	mux.HandleFunc("POST /api/roles", s.require(true, s.manageRole))
+	mux.HandleFunc("PATCH /api/roles/{id}", s.require(true, s.manageRole))
+	mux.HandleFunc("DELETE /api/roles/{id}", s.require(true, s.manageRole))
+	mux.HandleFunc("PATCH /api/users/{id}/role", s.require(true, s.assignRole))
 	mux.HandleFunc("POST /api/administrators", s.require(true, s.manageAdministrator))
 	mux.HandleFunc("PATCH /api/administrators/{id}", s.require(true, s.manageAdministrator))
 	mux.HandleFunc("DELETE /api/administrators/{id}", s.require(true, s.manageAdministrator))
@@ -279,7 +293,7 @@ func (s *Server) require(admin bool, next func(http.ResponseWriter, *http.Reques
 			fail(w, 401, "sign in required")
 			return
 		}
-		if admin && u.Role != "admin" {
+		if admin && !hasPermission(u, permissionForRequest(r)) {
 			fail(w, 403, "administrator required")
 			return
 		}
@@ -335,7 +349,7 @@ func (s *Server) listSites(w http.ResponseWriter, r *http.Request, u User) {
 	out := []map[string]any{}
 	state := s.store.snapshot()
 	for _, site := range state.Sites {
-		visible := canAccess(u, site.ID)
+		visible := canManage(u, site.OrganizationID, "sites:manage") || canManage(u, site.OrganizationID, "applications:manage") || canManage(u, site.OrganizationID, "members:manage") || canManage(u, site.OrganizationID, "groups:manage") || canAccess(u, site.ID)
 		for _, svc := range state.Services {
 			if svc.SiteID == site.ID && canAccessService(u, svc) {
 				visible = true
@@ -343,14 +357,15 @@ func (s *Server) listSites(w http.ResponseWriter, r *http.Request, u User) {
 			}
 		}
 		if visible {
-			out = append(out, map[string]any{"id": site.ID, "name": site.Name, "createdAt": site.CreatedAt, "online": s.tunnel.HasSession(site.ID)})
+			out = append(out, map[string]any{"id": site.ID, "name": site.Name, "createdAt": site.CreatedAt, "organizationID": site.OrganizationID, "online": s.tunnel.HasSession(site.ID)})
 		}
 	}
 	jsonOut(w, 200, out)
 }
 func (s *Server) createSite(w http.ResponseWriter, r *http.Request, u User) {
 	var b struct {
-		Name string `json:"name"`
+		OrganizationID string `json:"organizationID"`
+		Name           string `json:"name"`
 	}
 	if !decode(w, r, &b) {
 		return
@@ -360,8 +375,13 @@ func (s *Server) createSite(w http.ResponseWriter, r *http.Request, u User) {
 		fail(w, 400, "name must be 1–100 bytes")
 		return
 	}
+	org, err := selectedOrganization(s.store.snapshot(), u, b.OrganizationID)
+	if err != nil {
+		fail(w, 400, err.Error())
+		return
+	}
 	token := randomID()
-	site := Site{ID: randomID()[:16], Name: b.Name, TokenHash: digest(token), CreatedAt: time.Now().UTC()}
+	site := Site{OrganizationID: org, ID: randomID()[:16], Name: b.Name, TokenHash: digest(token), CreatedAt: time.Now().UTC()}
 	if err := s.store.update(func(st *State) error { st.Sites = append(st.Sites, site); return nil }); err != nil {
 		fail(w, 500, "could not save site")
 		return
@@ -375,9 +395,10 @@ func (s *Server) deleteSite(w http.ResponseWriter, r *http.Request, u User) {
 	defer unlock()
 	oldServices := s.store.snapshot().Services
 	id := r.PathValue("id")
+	removed, _ := s.store.site(id)
 	err := s.store.update(func(st *State) error {
 		for i, v := range st.Sites {
-			if v.ID == id {
+			if v.ID == id && canManage(u, v.OrganizationID, "sites:manage") {
 				st.Sites = append(st.Sites[:i], st.Sites[i+1:]...)
 				services := []Service{}
 				for _, svc := range st.Services {
@@ -421,7 +442,7 @@ func (s *Server) deleteSite(w http.ResponseWriter, r *http.Request, u User) {
 		}
 	}
 	s.disconnect(id)
-	s.audit("site_deleted", u.Username, id, "")
+	s.audit("site_deleted", u.Username, id, "", map[string]any{"organizationID": removed.OrganizationID})
 	jsonOut(w, 200, map[string]bool{"ok": true})
 }
 func (s *Server) rotateSite(w http.ResponseWriter, r *http.Request, u User) {
@@ -431,7 +452,7 @@ func (s *Server) rotateSite(w http.ResponseWriter, r *http.Request, u User) {
 	token := randomID()
 	err := s.store.update(func(st *State) error {
 		for i, v := range st.Sites {
-			if v.ID == id {
+			if v.ID == id && canManage(u, v.OrganizationID, "sites:manage") {
 				st.Sites[i].TokenHash = digest(token)
 				return nil
 			}
@@ -447,10 +468,16 @@ func (s *Server) rotateSite(w http.ResponseWriter, r *http.Request, u User) {
 	jsonOut(w, 200, map[string]string{"token": token})
 }
 func (s *Server) listServices(w http.ResponseWriter, r *http.Request, u User) {
-	out := []Service{}
+	out := []struct {
+		Service
+		Accessible bool `json:"accessible"`
+	}{}
 	for _, v := range s.store.snapshot().Services {
-		if canAccessService(u, v) {
-			out = append(out, v)
+		if canAccessService(u, v) || canManage(u, v.OrganizationID, "applications:manage") || canManage(u, v.OrganizationID, "members:manage") || canManage(u, v.OrganizationID, "groups:manage") {
+			out = append(out, struct {
+				Service
+				Accessible bool `json:"accessible"`
+			}{v, canAccessService(u, v)})
 		}
 	}
 	jsonOut(w, 200, out)
@@ -476,7 +503,8 @@ func (s *Server) createService(w http.ResponseWriter, r *http.Request, u User) {
 	svc := Service{ID: randomID()[:16], Name: b.Name, SiteID: b.SiteID, URL: target.String()}
 	err = s.store.update(func(st *State) error {
 		for _, site := range st.Sites {
-			if site.ID == b.SiteID {
+			if site.ID == b.SiteID && canManage(u, site.OrganizationID, "applications:manage") {
+				svc.OrganizationID = site.OrganizationID
 				st.Services = append(st.Services, svc)
 				return nil
 			}
@@ -494,9 +522,10 @@ func (s *Server) deleteService(w http.ResponseWriter, r *http.Request, u User) {
 	unlock := s.lockMutation(r)
 	defer unlock()
 	id := r.PathValue("id")
+	removed, _ := s.store.service(id)
 	err := s.store.update(func(st *State) error {
 		for i, v := range st.Services {
-			if v.ID == id {
+			if v.ID == id && canManage(u, v.OrganizationID, "applications:manage") {
 				st.Services = append(st.Services[:i], st.Services[i+1:]...)
 				for j := range st.Users {
 					apps := []string{}
@@ -518,23 +547,28 @@ func (s *Server) deleteService(w http.ResponseWriter, r *http.Request, u User) {
 		return
 	}
 	s.revokeService(id)
-	s.audit("service_deleted", u.Username, "", id)
+	s.audit("service_deleted", u.Username, "", id, map[string]any{"organizationID": removed.OrganizationID})
 	jsonOut(w, 200, map[string]bool{"ok": true})
 }
 func (s *Server) listUsers(w http.ResponseWriter, r *http.Request, u User) {
 	users := []userView{}
-	for _, member := range s.store.snapshot().Users {
-		users = append(users, publicUser(member))
+	st := s.store.snapshot()
+	for _, member := range st.Users {
+		if u.Role == "admin" || (member.Role != "admin" && canManage(u, member.OrganizationID, "members:manage")) {
+			member.Permissions = rolePermissions(st, member)
+			users = append(users, publicUser(member))
+		}
 	}
 	jsonOut(w, 200, users)
 }
 func (s *Server) createUser(w http.ResponseWriter, r *http.Request, u User) {
 	var b struct {
-		Username    string   `json:"username"`
-		Password    string   `json:"password"`
-		OIDCSubject string   `json:"oidcSubject"`
-		SiteIDs     []string `json:"siteIDs"`
-		ServiceIDs  []string `json:"serviceIDs"`
+		OrganizationID string   `json:"organizationID"`
+		Username       string   `json:"username"`
+		Password       string   `json:"password"`
+		OIDCSubject    string   `json:"oidcSubject"`
+		SiteIDs        []string `json:"siteIDs"`
+		ServiceIDs     []string `json:"serviceIDs"`
 	}
 	if !decode(w, r, &b) {
 		return
@@ -574,7 +608,12 @@ func (s *Server) createUser(w http.ResponseWriter, r *http.Request, u User) {
 	if b.ServiceIDs == nil {
 		b.ServiceIDs = []string{}
 	}
-	user := User{ID: randomID()[:16], Username: b.Username, PasswordHash: hash, Identity: identity, Role: "viewer", SiteIDs: b.SiteIDs, ServiceIDs: b.ServiceIDs}
+	org, orgErr := selectedOrganization(s.store.snapshot(), u, b.OrganizationID)
+	if orgErr != nil {
+		fail(w, 400, orgErr.Error())
+		return
+	}
+	user := User{OrganizationID: org, ID: randomID()[:16], Username: b.Username, PasswordHash: hash, Identity: identity, Role: "viewer", SiteIDs: b.SiteIDs, ServiceIDs: b.ServiceIDs}
 	err := s.store.update(func(st *State) error {
 		for _, v := range st.Users {
 			if v.Username == user.Username {
@@ -598,13 +637,14 @@ func (s *Server) deleteUser(w http.ResponseWriter, r *http.Request, u User) {
 	unlock := s.lockMutation(r)
 	defer unlock()
 	id := r.PathValue("id")
+	removed, _ := s.store.user(id)
 	if id == u.ID {
 		fail(w, 400, "cannot delete yourself")
 		return
 	}
 	err := s.store.update(func(st *State) error {
 		for i, v := range st.Users {
-			if v.ID == id && v.Role != "admin" {
+			if v.ID == id && v.Role != "admin" && canManageMember(u, v) {
 				st.Users = append(st.Users[:i], st.Users[i+1:]...)
 				pruneGrantReferences(st)
 				return nil
@@ -617,7 +657,7 @@ func (s *Server) deleteUser(w http.ResponseWriter, r *http.Request, u User) {
 		return
 	}
 	s.revokeUser(id)
-	s.audit("user_deleted", u.Username, "", id)
+	s.audit("user_deleted", u.Username, "", id, map[string]any{"organizationID": removed.OrganizationID})
 	jsonOut(w, 200, map[string]bool{"ok": true})
 }
 

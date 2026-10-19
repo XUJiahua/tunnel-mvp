@@ -5,6 +5,7 @@ type Member = {
   id: string;
   username: string;
   role: string;
+  organizationID?: string;
   disabled?: boolean;
   passwordLogin?: boolean;
 };
@@ -156,6 +157,7 @@ export function AdministratorsPanel({
                       </button>
                     </>
                   ) : (
+                    !m.organizationID &&
                     m.passwordLogin &&
                     !m.disabled && (
                       <button

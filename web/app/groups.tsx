@@ -5,6 +5,7 @@ import { Grants } from "./operations";
 type Group = {
   id: string;
   name: string;
+  organizationID?: string;
   memberIDs: string[];
   siteIDs: string[];
   serviceIDs: string[];
@@ -14,16 +15,19 @@ type Site = { id: string; name: string };
 type Service = { id: string; siteID: string; name: string; url: string };
 type Invite = {
   id: string;
+  organizationID?: string;
   username: string;
   expiresAt: string;
   expired: boolean;
   groupIDs: string[];
 };
 export function GroupsPanel({
+  organizationID,
   members,
   sites,
   services,
 }: {
+  organizationID: string;
   members: Member[];
   sites: Site[];
   services: Service[];
@@ -41,12 +45,16 @@ export function GroupsPanel({
         api<Group[]>("/groups"),
         api<Invite[]>("/invitations"),
       ]);
-      setGroups(g);
-      setInvites(i);
+      setGroups(
+        g.filter((v) => (v.organizationID || "default") === organizationID),
+      );
+      setInvites(
+        i.filter((v) => (v.organizationID || "default") === organizationID),
+      );
     } catch (e) {
       setError((e as Error).message);
     }
-  }, []);
+  }, [organizationID]);
   useEffect(() => {
     void load();
     const timer = setInterval(() => void load(), 10000);
@@ -61,6 +69,7 @@ export function GroupsPanel({
       if (inviting) {
         const result = await api<{ url: string }>("/invitations", "POST", {
           username: data.get("username"),
+          organizationID,
           hours: Number(data.get("hours")),
           siteIDs: data.getAll("siteIDs"),
           serviceIDs: data.getAll("serviceIDs"),
@@ -74,6 +83,7 @@ export function GroupsPanel({
           editing ? "PATCH" : "POST",
           {
             name: data.get("name"),
+            organizationID,
             memberIDs: data.getAll("memberIDs"),
             siteIDs: data.getAll("siteIDs"),
             serviceIDs: data.getAll("serviceIDs"),

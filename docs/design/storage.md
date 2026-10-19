@@ -36,7 +36,7 @@ Server 和所有读取活动数据目录的离线命令，都持有该目录的�
 
 打开已有数据失败时绝不重新初始化管理员。启动在审计文件或其他后续步骤失败时也会关闭存储并释放锁。关闭存储是幂等操作，先关闭数据库再释放目录锁。
 
-## 4. SQLite schema v3
+## 4. SQLite schema v4
 
 数据库为 `state.db`，设置固定 `application_id = 0x54554e4c`（TUNL）与 `user_version = 3`。打开已有数据库时验证标识、版本、quick_check、外键与业务模型。未知版本、错误文件、缺表或损坏数据均拒绝启动，不自动降级或覆盖。
 
@@ -78,7 +78,7 @@ JSON 正常更新沿用临时文件写入/fsync/原子替换。新建目录默�
 
 ## 7. 可移植备份
 
-导出格式固定为：`format=tunnel-state`、`version=3`（继续读取 v1/v2）、UTC 导出时间、规范 JSON 状态的 SHA-256，以及完整 State。无论来源后端为何，都可恢复成 JSON 或 SQLite。
+导出格式固定为：`format=tunnel-state`、`version=4`（继续读取 v1–v3）、UTC 导出时间、规范 JSON 状态的 SHA-256，以及完整 State。无论来源后端为何，都可恢复成 JSON 或 SQLite。
 
 校验和用于发现意外修改，不是签名或来源认证。备份含密码/Agent 令牌散列和内部服务地址，不加密；操作者应按敏感数据保存。审计日志、配置文件、环境变量中的明文凭据、TLS/CA 和内存会话不包含在此文件中。
 
@@ -93,3 +93,5 @@ JSON 正常更新沿用临时文件写入/fsync/原子替换。新建目录默�
 控制面真实隧道测试和浏览器流程在两个后端运行，发布流程也运行双后端验收。六个平台执行无 CGO 编译。OIDC 已在第三批实现；共享数据库、会话共享及跨实例隧道路由仍见 [路线图](../roadmap.md)。
 
 第五批新增 groups/invites 的 JSON payload 表（SQL 约束 JSON/ID/顺序，业务层验证引用），并将 v1/v2 升级事务扩展到 v3。恢复备份清空 pending 邀请，见 [用户组设计](groups-invitations.md)。
+
+组织批次新增归属列与 organizations/roles payload 表，域校验约束组织引用，详见 [组织与角色](organizations-roles.md)。

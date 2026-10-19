@@ -10,14 +10,15 @@ import (
 
 type userView struct {
 	User
-	PasswordLogin bool   `json:"passwordLogin"`
-	SessionMethod string `json:"sessionMethod,omitempty"`
+	PasswordLogin bool     `json:"passwordLogin"`
+	SessionMethod string   `json:"sessionMethod,omitempty"`
+	Permissions   []string `json:"permissions"`
 }
 
 func publicUser(u User) userView {
 	local := u.PasswordHash != ""
 	u.PasswordHash = ""
-	return userView{User: u, PasswordLogin: local}
+	return userView{User: u, PasswordLogin: local, Permissions: u.Permissions}
 }
 func (s *Server) issueSession(w http.ResponseWriter, u User, expires time.Time, metadata session) {
 	token := randomID()
@@ -75,14 +76,14 @@ func (s *Server) setDisabled(w http.ResponseWriter, r *http.Request, actor User)
 func (s *Server) mutateMember(w http.ResponseWriter, r *http.Request, actor User, event string, change func(*User) error) {
 	unlock := s.lockMutation(r)
 	defer unlock()
-	if current, _, ok := s.currentUser(r); !ok || current.Role != "admin" {
+	if current, _, ok := s.currentUser(r); !ok || !hasPermission(current, "members:manage") {
 		fail(w, 401, "administrator sign in required")
 		return
 	}
 	var out User
 	err := s.store.update(func(st *State) error {
 		for i := range st.Users {
-			if st.Users[i].ID == r.PathValue("id") && st.Users[i].Role != "admin" {
+			if st.Users[i].ID == r.PathValue("id") && st.Users[i].Role != "admin" && canManageMember(actor, st.Users[i]) {
 				if err := change(&st.Users[i]); err != nil {
 					return err
 				}

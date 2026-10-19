@@ -7,6 +7,7 @@ type Site = { id: string; name: string };
 type Service = { id: string; siteID: string; name: string; url: string };
 type User = {
   id: string;
+  organizationID?: string;
   username: string;
   siteIDs: string[];
   serviceIDs?: string[];

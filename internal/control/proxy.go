@@ -214,7 +214,7 @@ func (s *Server) probe(w http.ResponseWriter, r *http.Request, u User) {
 	}
 	u = fresh
 	svc, ok := s.store.service(r.PathValue("id"))
-	if !ok || !canAccessService(u, svc) {
+	if !ok || (!canAccessService(u, svc) && !canManage(u, svc.OrganizationID, "applications:manage")) {
 		s.accessMu.RUnlock()
 		fail(w, 404, "service not found")
 		return

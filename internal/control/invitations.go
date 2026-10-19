@@ -11,33 +11,37 @@ import (
 )
 
 type inviteView struct {
-	ID         string    `json:"id"`
-	Username   string    `json:"username"`
-	CreatedAt  time.Time `json:"createdAt"`
-	ExpiresAt  time.Time `json:"expiresAt"`
-	SiteIDs    []string  `json:"siteIDs"`
-	ServiceIDs []string  `json:"serviceIDs"`
-	GroupIDs   []string  `json:"groupIDs"`
-	Expired    bool      `json:"expired"`
+	ID             string    `json:"id"`
+	OrganizationID string    `json:"organizationID,omitempty"`
+	Username       string    `json:"username"`
+	CreatedAt      time.Time `json:"createdAt"`
+	ExpiresAt      time.Time `json:"expiresAt"`
+	SiteIDs        []string  `json:"siteIDs"`
+	ServiceIDs     []string  `json:"serviceIDs"`
+	GroupIDs       []string  `json:"groupIDs"`
+	Expired        bool      `json:"expired"`
 }
 
 func viewInvite(v state.Invite) inviteView {
-	return inviteView{v.ID, v.Username, v.CreatedAt, v.ExpiresAt, v.SiteIDs, v.ServiceIDs, v.GroupIDs, !time.Now().Before(v.ExpiresAt)}
+	return inviteView{v.ID, v.OrganizationID, v.Username, v.CreatedAt, v.ExpiresAt, v.SiteIDs, v.ServiceIDs, v.GroupIDs, !time.Now().Before(v.ExpiresAt)}
 }
 func (s *Server) listInvites(w http.ResponseWriter, r *http.Request, actor User) {
 	out := []inviteView{}
 	for _, v := range s.store.snapshot().Invites {
-		out = append(out, viewInvite(v))
+		if canManage(actor, v.OrganizationID, "groups:manage") {
+			out = append(out, viewInvite(v))
+		}
 	}
 	jsonOut(w, 200, out)
 }
 func (s *Server) createInvite(w http.ResponseWriter, r *http.Request, actor User) {
 	var body struct {
-		Username   string   `json:"username"`
-		Hours      int      `json:"hours"`
-		SiteIDs    []string `json:"siteIDs"`
-		ServiceIDs []string `json:"serviceIDs"`
-		GroupIDs   []string `json:"groupIDs"`
+		Username       string   `json:"username"`
+		OrganizationID string   `json:"organizationID"`
+		Hours          int      `json:"hours"`
+		SiteIDs        []string `json:"siteIDs"`
+		ServiceIDs     []string `json:"serviceIDs"`
+		GroupIDs       []string `json:"groupIDs"`
 	}
 	if !decode(w, r, &body) {
 		return
@@ -52,10 +56,15 @@ func (s *Server) createInvite(w http.ResponseWriter, r *http.Request, actor User
 	}
 	token := randomID()
 	now := time.Now().UTC()
-	invite := state.Invite{ID: randomID()[:16], Username: body.Username, TokenHash: digest(token), CreatedAt: now, ExpiresAt: now.Add(time.Duration(body.Hours) * time.Hour), SiteIDs: body.SiteIDs, ServiceIDs: body.ServiceIDs, GroupIDs: body.GroupIDs}
+	org, orgErr := selectedOrganization(s.store.snapshot(), actor, body.OrganizationID)
+	if orgErr != nil {
+		fail(w, 400, orgErr.Error())
+		return
+	}
+	invite := state.Invite{OrganizationID: org, ID: randomID()[:16], Username: body.Username, TokenHash: digest(token), CreatedAt: now, ExpiresAt: now.Add(time.Duration(body.Hours) * time.Hour), SiteIDs: body.SiteIDs, ServiceIDs: body.ServiceIDs, GroupIDs: body.GroupIDs}
 	unlock := s.lockMutation(r)
 	defer unlock()
-	if current, _, ok := s.currentUser(r); !ok || current.Role != "admin" {
+	if current, _, ok := s.currentUser(r); !ok || !hasPermission(current, "groups:manage") {
 		fail(w, 401, "administrator sign in required")
 		return
 	}
@@ -81,14 +90,16 @@ func (s *Server) createInvite(w http.ResponseWriter, r *http.Request, actor User
 func (s *Server) deleteInvite(w http.ResponseWriter, r *http.Request, actor User) {
 	unlock := s.lockMutation(r)
 	defer unlock()
-	if current, _, ok := s.currentUser(r); !ok || current.Role != "admin" {
+	if current, _, ok := s.currentUser(r); !ok || !hasPermission(current, "groups:manage") {
 		fail(w, 401, "administrator sign in required")
 		return
 	}
 	id := r.PathValue("id")
+	org := ""
 	err := s.store.update(func(st *State) error {
 		for i, v := range st.Invites {
-			if v.ID == id {
+			if v.ID == id && canManage(actor, v.OrganizationID, "groups:manage") {
+				org = v.OrganizationID
 				st.Invites = append(st.Invites[:i], st.Invites[i+1:]...)
 				return nil
 			}
@@ -99,7 +110,7 @@ func (s *Server) deleteInvite(w http.ResponseWriter, r *http.Request, actor User
 		fail(w, 404, "invitation not found")
 		return
 	}
-	s.audit("invitation_revoked", actor.Username, "", id)
+	s.audit("invitation_revoked", actor.Username, "", id, map[string]any{"organizationID": org})
 	jsonOut(w, 200, map[string]bool{"ok": true})
 }
 func (s *Server) inviteAttempt(key string, max int) bool {
@@ -181,7 +192,7 @@ func (s *Server) acceptInvite(w http.ResponseWriter, r *http.Request) {
 		if !ok {
 			return fmt.Errorf("invitation invalid or expired")
 		}
-		member = User{ID: randomID()[:16], Username: invite.Username, PasswordHash: string(hash), Role: "viewer", SiteIDs: invite.SiteIDs, ServiceIDs: invite.ServiceIDs}
+		member = User{OrganizationID: invite.OrganizationID, ID: randomID()[:16], Username: invite.Username, PasswordHash: string(hash), Role: "viewer", SiteIDs: invite.SiteIDs, ServiceIDs: invite.ServiceIDs}
 		for _, groupID := range invite.GroupIDs {
 			for i := range st.Groups {
 				if st.Groups[i].ID == groupID {

@@ -12,7 +12,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const SchemaVersion = 3
+const SchemaVersion = 4
 const applicationID = 0x54554e4c // TUNL
 
 type sqliteBackend struct{ db *sql.DB }
@@ -41,19 +41,23 @@ func connectSQLite(path string) (*sqliteBackend, error) {
 	return &sqliteBackend{db}, nil
 }
 
+var schemaV4 = []string{
+	`CREATE TABLE organizations (id TEXT PRIMARY KEY,position INTEGER NOT NULL UNIQUE,payload TEXT NOT NULL CHECK(json_valid(payload)))`,
+	`CREATE TABLE roles (id TEXT PRIMARY KEY,position INTEGER NOT NULL UNIQUE,payload TEXT NOT NULL CHECK(json_valid(payload)))`,
+}
 var schemaV3 = []string{
 	`CREATE TABLE groups (id TEXT PRIMARY KEY,position INTEGER NOT NULL UNIQUE,payload TEXT NOT NULL CHECK(json_valid(payload)))`,
 	`CREATE TABLE invites (id TEXT PRIMARY KEY,position INTEGER NOT NULL UNIQUE,payload TEXT NOT NULL CHECK(json_valid(payload)))`,
 }
 var schema = append([]string{
-	`CREATE TABLE users (id TEXT PRIMARY KEY, position INTEGER NOT NULL UNIQUE, username TEXT NOT NULL UNIQUE, password_hash TEXT NOT NULL, role TEXT NOT NULL CHECK(role IN ('admin','viewer')), disabled INTEGER NOT NULL DEFAULT 0 CHECK(disabled IN (0,1)), oidc_issuer TEXT NOT NULL DEFAULT '', oidc_subject TEXT NOT NULL DEFAULT '')`,
-	`CREATE TABLE sites (id TEXT PRIMARY KEY, position INTEGER NOT NULL UNIQUE, name TEXT NOT NULL, token_hash TEXT NOT NULL CHECK(length(token_hash)=64), created_at TEXT NOT NULL)`,
-	`CREATE TABLE services (id TEXT PRIMARY KEY, position INTEGER NOT NULL UNIQUE, name TEXT NOT NULL, site_id TEXT NOT NULL REFERENCES sites(id), url TEXT NOT NULL)`,
+	`CREATE TABLE users (id TEXT PRIMARY KEY, position INTEGER NOT NULL UNIQUE, username TEXT NOT NULL UNIQUE, password_hash TEXT NOT NULL, role TEXT NOT NULL CHECK(role IN ('admin','viewer')), disabled INTEGER NOT NULL DEFAULT 0 CHECK(disabled IN (0,1)), oidc_issuer TEXT NOT NULL DEFAULT '', oidc_subject TEXT NOT NULL DEFAULT '', organization_id TEXT NOT NULL DEFAULT '', role_id TEXT NOT NULL DEFAULT '')`,
+	`CREATE TABLE sites (id TEXT PRIMARY KEY, position INTEGER NOT NULL UNIQUE, name TEXT NOT NULL, token_hash TEXT NOT NULL CHECK(length(token_hash)=64), created_at TEXT NOT NULL, organization_id TEXT NOT NULL DEFAULT '')`,
+	`CREATE TABLE services (id TEXT PRIMARY KEY, position INTEGER NOT NULL UNIQUE, name TEXT NOT NULL, site_id TEXT NOT NULL REFERENCES sites(id), url TEXT NOT NULL, organization_id TEXT NOT NULL DEFAULT '')`,
 	`CREATE TABLE user_sites (user_id TEXT NOT NULL REFERENCES users(id), site_id TEXT NOT NULL REFERENCES sites(id), position INTEGER NOT NULL, PRIMARY KEY(user_id,site_id), UNIQUE(user_id,position))`,
 	`CREATE TABLE user_services (user_id TEXT NOT NULL REFERENCES users(id), service_id TEXT NOT NULL REFERENCES services(id), position INTEGER NOT NULL, PRIMARY KEY(user_id,service_id), UNIQUE(user_id,position))`,
 	`CREATE INDEX services_site ON services(site_id)`,
 	`CREATE UNIQUE INDEX users_identity ON users(oidc_issuer,oidc_subject) WHERE oidc_issuer != ''`,
-}, schemaV3...)
+}, append(schemaV3, schemaV4...)...)
 
 func createSQLite(path string, s State) (*sqliteBackend, error) {
 	b, err := connectSQLite(path)
@@ -153,6 +157,10 @@ func openSQLite(path string) (backend, State, error) {
 		if version < 3 {
 			statements = append(statements, schemaV3...)
 		}
+		if version < 4 {
+			statements = append(statements, "ALTER TABLE users ADD COLUMN organization_id TEXT NOT NULL DEFAULT ''", "ALTER TABLE users ADD COLUMN role_id TEXT NOT NULL DEFAULT ''", "ALTER TABLE sites ADD COLUMN organization_id TEXT NOT NULL DEFAULT ''", "ALTER TABLE services ADD COLUMN organization_id TEXT NOT NULL DEFAULT ''")
+			statements = append(statements, schemaV4...)
+		}
 		statements = append(statements, fmt.Sprintf("PRAGMA user_version=%d", SchemaVersion))
 		for _, statement := range statements {
 			if _, err = tx.Exec(statement); err != nil {
@@ -190,7 +198,7 @@ func (b *sqliteBackend) save(s State) error {
 	// This version deliberately writes one validated aggregate per transaction.
 	// The in-memory read model stays fast; incremental SQL updates can be added
 	// behind Repository without changing control-plane authorization handlers.
-	for _, table := range []string{"invites", "groups", "user_services", "user_sites", "services", "sites", "users"} {
+	for _, table := range []string{"roles", "organizations", "invites", "groups", "user_services", "user_sites", "services", "sites", "users"} {
 		if _, err = tx.Exec("DELETE FROM " + table); err != nil {
 			return err
 		}
@@ -200,17 +208,17 @@ func (b *sqliteBackend) save(s State) error {
 		if v.Identity != nil {
 			issuer, subject = v.Identity.Issuer, v.Identity.Subject
 		}
-		if _, err = tx.Exec("INSERT INTO users VALUES(?,?,?,?,?,?,?,?)", v.ID, i, v.Username, v.PasswordHash, v.Role, v.Disabled, issuer, subject); err != nil {
+		if _, err = tx.Exec("INSERT INTO users VALUES(?,?,?,?,?,?,?,?,?,?)", v.ID, i, v.Username, v.PasswordHash, v.Role, v.Disabled, issuer, subject, v.OrganizationID, v.RoleID); err != nil {
 			return err
 		}
 	}
 	for i, v := range s.Sites {
-		if _, err = tx.Exec("INSERT INTO sites VALUES(?,?,?,?,?)", v.ID, i, v.Name, v.TokenHash, v.CreatedAt.Format(time.RFC3339Nano)); err != nil {
+		if _, err = tx.Exec("INSERT INTO sites VALUES(?,?,?,?,?,?)", v.ID, i, v.Name, v.TokenHash, v.CreatedAt.Format(time.RFC3339Nano), v.OrganizationID); err != nil {
 			return err
 		}
 	}
 	for i, v := range s.Services {
-		if _, err = tx.Exec("INSERT INTO services VALUES(?,?,?,?,?)", v.ID, i, v.Name, v.SiteID, v.URL); err != nil {
+		if _, err = tx.Exec("INSERT INTO services VALUES(?,?,?,?,?,?)", v.ID, i, v.Name, v.SiteID, v.URL, v.OrganizationID); err != nil {
 			return err
 		}
 	}
@@ -244,6 +252,33 @@ func (b *sqliteBackend) save(s State) error {
 			return err
 		}
 	}
+	for table, values := range map[string][]any{"organizations": {}, "roles": {}} {
+		if table == "organizations" {
+			for _, v := range s.Organizations {
+				values = append(values, v)
+			}
+		} else {
+			for _, v := range s.Roles {
+				values = append(values, v)
+			}
+		}
+		for i, v := range values {
+			raw, err := json.Marshal(v)
+			if err != nil {
+				return err
+			}
+			id := ""
+			switch x := v.(type) {
+			case Organization:
+				id = x.ID
+			case Role:
+				id = x.ID
+			}
+			if _, err = tx.Exec("INSERT INTO "+table+" VALUES(?,?,?)", id, i, string(raw)); err != nil {
+				return err
+			}
+		}
+	}
 	return tx.Commit()
 }
 func (b *sqliteBackend) load() (State, error) { return loadSQLite(b.db) }
@@ -254,7 +289,7 @@ type sqlReader interface {
 
 func loadSQLite(reader sqlReader) (State, error) {
 	s := State{Users: []User{}, Sites: []Site{}, Services: []Service{}}
-	rows, err := reader.Query("SELECT id,username,password_hash,role,disabled,oidc_issuer,oidc_subject FROM users ORDER BY position")
+	rows, err := reader.Query("SELECT id,username,password_hash,role,disabled,oidc_issuer,oidc_subject,organization_id,role_id FROM users ORDER BY position")
 	if err != nil {
 		return s, err
 	}
@@ -263,7 +298,7 @@ func loadSQLite(reader sqlReader) (State, error) {
 		var issuer, subject string
 		u.SiteIDs = []string{}
 		u.ServiceIDs = []string{}
-		if err = rows.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &u.Disabled, &issuer, &subject); err != nil {
+		if err = rows.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &u.Disabled, &issuer, &subject, &u.OrganizationID, &u.RoleID); err != nil {
 			_ = rows.Close()
 			return s, err
 		}
@@ -277,14 +312,14 @@ func loadSQLite(reader sqlReader) (State, error) {
 	if err != nil {
 		return s, err
 	}
-	rows, err = reader.Query("SELECT id,name,token_hash,created_at FROM sites ORDER BY position")
+	rows, err = reader.Query("SELECT id,name,token_hash,created_at,organization_id FROM sites ORDER BY position")
 	if err != nil {
 		return s, err
 	}
 	for rows.Next() {
 		var v Site
 		var created string
-		if err = rows.Scan(&v.ID, &v.Name, &v.TokenHash, &created); err != nil {
+		if err = rows.Scan(&v.ID, &v.Name, &v.TokenHash, &created, &v.OrganizationID); err != nil {
 			_ = rows.Close()
 			return s, err
 		}
@@ -300,13 +335,13 @@ func loadSQLite(reader sqlReader) (State, error) {
 	if err != nil {
 		return s, err
 	}
-	rows, err = reader.Query("SELECT id,name,site_id,url FROM services ORDER BY position")
+	rows, err = reader.Query("SELECT id,name,site_id,url,organization_id FROM services ORDER BY position")
 	if err != nil {
 		return s, err
 	}
 	for rows.Next() {
 		var v Service
-		if err = rows.Scan(&v.ID, &v.Name, &v.SiteID, &v.URL); err != nil {
+		if err = rows.Scan(&v.ID, &v.Name, &v.SiteID, &v.URL, &v.OrganizationID); err != nil {
 			_ = rows.Close()
 			return s, err
 		}
@@ -353,7 +388,7 @@ func loadSQLite(reader sqlReader) (State, error) {
 			return s, err
 		}
 	}
-	for _, table := range []string{"groups", "invites"} {
+	for _, table := range []string{"organizations", "roles", "groups", "invites"} {
 		rows, err = reader.Query("SELECT id,payload FROM " + table + " ORDER BY position")
 		if err != nil {
 			return s, err
@@ -364,7 +399,21 @@ func loadSQLite(reader sqlReader) (State, error) {
 				rows.Close()
 				return s, err
 			}
-			if table == "groups" {
+			if table == "organizations" {
+				var v Organization
+				if err = decodeStrict([]byte(raw), &v); err != nil || v.ID != id {
+					rows.Close()
+					return s, fmt.Errorf("invalid organization payload")
+				}
+				s.Organizations = append(s.Organizations, v)
+			} else if table == "roles" {
+				var v Role
+				if err = decodeStrict([]byte(raw), &v); err != nil || v.ID != id {
+					rows.Close()
+					return s, fmt.Errorf("invalid role payload")
+				}
+				s.Roles = append(s.Roles, v)
+			} else if table == "groups" {
 				var v Group
 				if err = decodeStrict([]byte(raw), &v); err != nil || v.ID != id {
 					rows.Close()

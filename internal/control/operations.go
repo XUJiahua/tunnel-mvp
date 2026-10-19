@@ -144,7 +144,7 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request, u User) {
 	}
 	s.monitorMu.Unlock()
 	for _, svc := range s.store.snapshot().Services {
-		if canAccessService(u, svc) {
+		if canAccessService(u, svc) || canManage(u, svc.OrganizationID, "applications:manage") {
 			if p, ok := reports[svc.ID]; ok {
 				out = append(out, p)
 			}
@@ -190,7 +190,7 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request, _ User) {
 
 // The console reads a bounded tail of the current audit file. Rotated files
 // remain available for backup and external log collection.
-func (s *Server) listAudit(w http.ResponseWriter, r *http.Request, _ User) {
+func (s *Server) listAudit(w http.ResponseWriter, r *http.Request, actor User) {
 	limit := 100
 	if raw := r.URL.Query().Get("limit"); raw != "" {
 		n, err := strconv.Atoi(raw)
@@ -229,6 +229,12 @@ func (s *Server) listAudit(w http.ResponseWriter, r *http.Request, _ User) {
 		var row map[string]any
 		if json.Unmarshal(scanner.Bytes(), &row) != nil {
 			continue
+		}
+		if actor.Role != "admin" {
+			org, ok := row["organizationID"].(string)
+			if !ok || org != actor.OrganizationID {
+				continue
+			}
 		}
 		if event := r.URL.Query().Get("event"); event != "" && row["event"] != event {
 			continue

@@ -9,6 +9,7 @@ import {
   useState,
 } from "react";
 
+import { OrganizationsPanel } from "./organizations";
 import { AdministratorsPanel } from "./administrators";
 import { GroupsPanel } from "./groups";
 import { InvitationLanding } from "./invitation";
@@ -20,6 +21,9 @@ type User = {
   id: string;
   username: string;
   role: "admin" | "viewer";
+  organizationID?: string;
+  roleID?: string;
+  permissions?: string[];
   siteIDs: string[];
   serviceIDs?: string[];
   disabled?: boolean;
@@ -27,8 +31,21 @@ type User = {
   passwordLogin?: boolean;
   sessionMethod?: string;
 };
-type Site = { id: string; name: string; online: boolean; createdAt: string };
-type Service = { id: string; name: string; siteID: string; url: string };
+type Site = {
+  organizationID?: string;
+  id: string;
+  name: string;
+  online: boolean;
+  createdAt: string;
+};
+type Service = {
+  organizationID?: string;
+  accessible?: boolean;
+  id: string;
+  name: string;
+  siteID: string;
+  url: string;
+};
 type Probe = {
   reachable: boolean;
   healthy?: boolean;
@@ -187,6 +204,10 @@ export default function Home() {
     issuer: "",
     oidcLogout: false,
   });
+  const [organizations, setOrganizations] = useState<
+    { id: string; name: string }[]
+  >([]);
+  const [organization, setOrganization] = useState("default");
   const [inviteToken, setInviteToken] = useState("");
   const [memberAuth, setMemberAuth] = useState("local");
   const [user, setUser] = useState<User | null>(null);
@@ -211,43 +232,66 @@ export default function Home() {
   } | null>(null);
   const [probing, setProbing] = useState("");
   const [opening, setOpening] = useState("");
-  const admin = user?.role === "admin";
+  const root = user?.role === "admin";
+  const permitted = (p: string) => !!root || !!user?.permissions?.includes(p);
+  const admin =
+    !!root ||
+    !!user?.permissions?.some(
+      (p) => p.endsWith(":manage") || p === "audit:read",
+    );
   const sessionExpired = useCallback(() => {
     setUser(null);
     setTab("overview");
   }, []);
 
-  const refresh = useCallback(async (u: User) => {
-    const [a, b, c, health] = await Promise.all([
-      api<Site[]>("/sites"),
-      api<Service[]>("/services"),
-      u.role === "admin" ? api<User[]>("/users") : Promise.resolve([]),
-      api<{ reports: Probe[] }>("/status"),
-    ]);
-    setProbes((previous) => {
-      const next: Record<string, Probe> = {};
-      for (const service of b) {
-        const previousReport = previous[service.id];
-        const current =
-          previousReport?.target === service.url &&
-          previousReport.siteID === service.siteID
-            ? previousReport
-            : undefined;
-        const report = health.reports.find((p) => p.serviceID === service.id);
-        if (
-          report &&
-          (!current?.checkedAt || (report.checkedAt || "") >= current.checkedAt)
-        )
-          next[service.id] = report;
-        else if (current) next[service.id] = current;
-      }
-      return next;
-    });
-    setSites(a);
-    setServices(b);
-    setUsers(c);
-    setConnected(true);
-  }, []);
+  const refresh = useCallback(
+    async (u: User) => {
+      const [rawSites, rawServices, rawUsers, health, orgs] = await Promise.all(
+        [
+          api<Site[]>("/sites"),
+          api<Service[]>("/services"),
+          u.role === "admin" || u.permissions?.includes("members:manage")
+            ? api<User[]>("/users")
+            : u.permissions?.includes("groups:manage")
+              ? api<User[]>("/group-members")
+              : Promise.resolve([]),
+          api<{ reports: Probe[] }>("/status"),
+          api<{ id: string; name: string }[]>("/organizations"),
+        ],
+      );
+      const owned = (v: { organizationID?: string }) =>
+        u.role !== "admin" || (v.organizationID || "default") === organization;
+      const a = rawSites.filter(owned),
+        b = rawServices.filter(owned),
+        c = rawUsers.filter((v) => v.role === "admin" || owned(v));
+      setOrganizations(orgs);
+      setProbes((previous) => {
+        const next: Record<string, Probe> = {};
+        for (const service of b) {
+          const previousReport = previous[service.id];
+          const current =
+            previousReport?.target === service.url &&
+            previousReport.siteID === service.siteID
+              ? previousReport
+              : undefined;
+          const report = health.reports.find((p) => p.serviceID === service.id);
+          if (
+            report &&
+            (!current?.checkedAt ||
+              (report.checkedAt || "") >= current.checkedAt)
+          )
+            next[service.id] = report;
+          else if (current) next[service.id] = current;
+        }
+        return next;
+      });
+      setSites(a);
+      setServices(b);
+      setUsers(c);
+      setConnected(true);
+    },
+    [organization],
+  );
   useEffect(() => {
     const read = () => {
       const token = new URLSearchParams(window.location.hash.slice(1)).get(
@@ -337,6 +381,7 @@ export default function Home() {
       if (dialog === "site") {
         const res = await api<{ site: Site; token: string }>("/sites", "POST", {
           name: data.get("name"),
+          organizationID: root ? organization : user?.organizationID,
         });
         setEnrollment({ ...res.site, token: res.token });
       }
@@ -345,6 +390,7 @@ export default function Home() {
       if (dialog === "user")
         await api("/users", "POST", {
           username: data.get("username"),
+          organizationID: root ? organization : user?.organizationID,
           password: data.get("password") || "",
           oidcSubject: data.get("oidcSubject") || "",
           siteIDs: data.getAll("siteIDs"),
@@ -455,6 +501,7 @@ export default function Home() {
     sites: ["站点", "连接你的数据面，建立安全的出站隧道。"],
     services: ["应用", "从这里进入已授权的内网服务。"],
     users: ["访问权限", "为成员分配整站或单独应用访问权限。"],
+    organizations: ["组织与角色", "设置组织边界、管理能力和角色成员。"],
     administrators: ["管理员", "管理全局管理员，敏感变更需要再次验证密码。"],
     groups: ["用户组与邀请", "管理共享授权，并邀请成员自行设置密码。"],
     sessions: ["登录设备", "查看活跃会话，并撤销指定设备的访问。"],
@@ -558,7 +605,13 @@ export default function Home() {
     );
 
   const addButton = (type: Dialog, label: string) =>
-    admin && (
+    permitted(
+      type === "site"
+        ? "sites:manage"
+        : type === "service"
+          ? "applications:manage"
+          : "members:manage",
+    ) && (
       <button
         className="primary"
         onClick={() => {
@@ -603,7 +656,7 @@ export default function Home() {
             >
               查看应用 →
             </button>
-            {admin && (
+            {permitted("sites:manage") && (
               <div>
                 <button
                   className="subtle"
@@ -692,13 +745,17 @@ export default function Home() {
                   <div className="row-actions">
                     <button
                       className="open-button"
-                      disabled={!site?.online || opening === service.id}
+                      disabled={
+                        !site?.online ||
+                        opening === service.id ||
+                        service.accessible === false
+                      }
                       onClick={() => launch(service)}
                     >
                       {opening === service.id ? "打开中…" : "打开"}
                       <Icon name="arrow" size={15} />
                     </button>
-                    {admin && (
+                    {permitted("applications:manage") && (
                       <button
                         className="subtle"
                         onClick={() => setEditor({ kind: "service", service })}
@@ -706,7 +763,7 @@ export default function Home() {
                         编辑
                       </button>
                     )}
-                    {admin && (
+                    {permitted("applications:manage") && (
                       <button
                         className="subtle danger"
                         onClick={() =>
@@ -738,6 +795,28 @@ export default function Home() {
           </div>
           <span className="version">MVP</span>
         </div>
+        {root && (
+          <label className="field">
+            <span>组织范围</span>
+            <select
+              aria-label="组织范围"
+              value={organization}
+              onChange={(e) => {
+                setOrganization(e.target.value);
+                setSiteFilter("");
+                setEditor(null);
+                setDialog(null);
+                setProbes({});
+              }}
+            >
+              {organizations.map((o) => (
+                <option key={o.id} value={o.id}>
+                  {o.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
         <span className="nav-label">工作空间</span>
         <nav>
           {[
@@ -745,13 +824,20 @@ export default function Home() {
             ["sites", "server", "站点"],
             ["services", "apps", "应用"],
             ["sessions", "shield", "登录设备"],
-            ...(admin
+            ...(permitted("members:manage")
+              ? [["users", "users", "访问权限"]]
+              : []),
+            ...(permitted("groups:manage")
+              ? [["groups", "users", "用户组与邀请"]]
+              : []),
+            ...(root
               ? [
-                  ["users", "users", "访问权限"],
-                  ["groups", "users", "用户组与邀请"],
+                  ["organizations", "grid", "组织与角色"],
                   ["administrators", "shield", "管理员"],
-                  ["audit", "shield", "审计日志"],
                 ]
+              : []),
+            ...(permitted("audit:read")
+              ? [["audit", "shield", "审计日志"]]
               : []),
           ].map(([key, icon, label]) => (
             <button
@@ -1015,25 +1101,36 @@ export default function Home() {
             </>
           )}
           {tab === "sessions" && (
-            <SessionsPanel admin={admin} onExpired={sessionExpired} />
+            <SessionsPanel admin={!!root} onExpired={sessionExpired} />
           )}
-          {tab === "groups" && admin && (
-            <GroupsPanel members={users} sites={sites} services={services} />
+          {tab === "groups" && permitted("groups:manage") && (
+            <GroupsPanel
+              key={root ? organization : user.organizationID || "default"}
+              organizationID={
+                root ? organization : user.organizationID || "default"
+              }
+              members={users.filter((m) => m.role !== "admin")}
+              sites={sites}
+              services={services}
+            />
           )}
-          {tab === "administrators" && admin && (
+          {tab === "administrators" && root && (
             <AdministratorsPanel
               members={users}
               onChanged={() => user && refresh(user)}
               onExpired={sessionExpired}
             />
           )}
-          {tab === "audit" && admin && <AuditPanel />}
-          {tab === "users" && (
+          {tab === "audit" && permitted("audit:read") && <AuditPanel />}
+          {tab === "organizations" && root && (
+            <OrganizationsPanel onChanged={() => refresh(user)} />
+          )}
+          {tab === "users" && permitted("members:manage") && (
             <>
               <div className="permission-note">
                 <Icon name="shield" />
                 <p>
-                  管理员可管理全部站点。成员可通过整站授权或单独应用授权查看、检测和打开应用；Agent
+                  全局管理员可管理全部组织；组织角色只在所属组织内生效。成员可通过整站授权或单独应用授权访问；Agent
                   仍会独立检查目标白名单。
                 </p>
               </div>
@@ -1090,7 +1187,7 @@ export default function Home() {
                           )}
                         </td>
                         <td className="right">
-                          {u.role !== "admin" && (
+                          {u.role !== "admin" && (root || !u.roleID) && (
                             <>
                               <button
                                 className="subtle"
@@ -1151,7 +1248,7 @@ export default function Home() {
                               </button>
                             </>
                           )}
-                          {u.role !== "admin" && (
+                          {u.role !== "admin" && (root || !u.roleID) && (
                             <button
                               className="subtle danger"
                               onClick={() => remove("users", u.id, u.username)}
@@ -1179,8 +1276,16 @@ export default function Home() {
         <ResourceEditor
           editor={editor}
           oidcIssuer={authOptions.issuer}
-          sites={sites}
-          services={services}
+          sites={sites.filter(
+            (v) =>
+              !("user" in editor) ||
+              (v.organizationID || "") === (editor.user.organizationID || ""),
+          )}
+          services={services.filter(
+            (v) =>
+              !("user" in editor) ||
+              (v.organizationID || "") === (editor.user.organizationID || ""),
+          )}
           onClose={() => setEditor(null)}
           onSaved={async (reauth) => {
             setEditor(null);

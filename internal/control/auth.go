@@ -149,6 +149,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	}
 	s.issueSession(w, found, time.Now().Add(12*time.Hour), sessionMetadata(r, "password", "", "", ""))
 	s.audit("login", found.Username, "", "")
+	found, _ = s.store.user(found.ID)
 	jsonOut(w, 200, publicUser(found))
 }
 func constantEqual(a, b string) bool { return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1 }

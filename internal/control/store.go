@@ -90,6 +90,12 @@ func canAccessService(u User, svc Service) bool {
 	if u.Disabled {
 		return false
 	}
+	if u.Role != "admin" && u.OrganizationID != svc.OrganizationID {
+		return false
+	}
+	if canManage(u, svc.OrganizationID, "applications:access") {
+		return true
+	}
 	if canAccess(u, svc.SiteID) {
 		return true
 	}

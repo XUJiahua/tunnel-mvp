@@ -73,10 +73,11 @@ func (s *Server) manageAdministrator(w http.ResponseWriter, r *http.Request, act
 				continue
 			}
 			if action == "promote" {
-				if u.Role != "viewer" || u.Disabled || u.PasswordHash == "" {
+				if u.Role != "viewer" || u.OrganizationID != "" || u.Disabled || u.PasswordHash == "" {
 					return fmt.Errorf("promotion requires an enabled local-password member")
 				}
 				u.Role = "admin"
+				u.RoleID = ""
 			} else {
 				if u.Role != "admin" {
 					return fmt.Errorf("administrator not found")

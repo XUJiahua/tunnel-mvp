@@ -22,50 +22,69 @@ type Identity struct {
 }
 
 type User struct {
-	ID           string    `json:"id"`
-	Disabled     bool      `json:"disabled,omitempty"`
-	Identity     *Identity `json:"identity,omitempty"`
-	Username     string    `json:"username"`
-	PasswordHash string    `json:"passwordHash,omitempty"`
-	Role         string    `json:"role"`
-	SiteIDs      []string  `json:"siteIDs"`
-	ServiceIDs   []string  `json:"serviceIDs"`
+	OrganizationID string    `json:"organizationID,omitempty"`
+	RoleID         string    `json:"roleID,omitempty"`
+	Permissions    []string  `json:"-"`
+	ID             string    `json:"id"`
+	Disabled       bool      `json:"disabled,omitempty"`
+	Identity       *Identity `json:"identity,omitempty"`
+	Username       string    `json:"username"`
+	PasswordHash   string    `json:"passwordHash,omitempty"`
+	Role           string    `json:"role"`
+	SiteIDs        []string  `json:"siteIDs"`
+	ServiceIDs     []string  `json:"serviceIDs"`
 }
 type Site struct {
-	ID        string    `json:"id"`
-	Name      string    `json:"name"`
-	TokenHash string    `json:"tokenHash,omitempty"`
-	CreatedAt time.Time `json:"createdAt"`
+	OrganizationID string    `json:"organizationID,omitempty"`
+	ID             string    `json:"id"`
+	Name           string    `json:"name"`
+	TokenHash      string    `json:"tokenHash,omitempty"`
+	CreatedAt      time.Time `json:"createdAt"`
 }
 type Service struct {
-	ID     string `json:"id"`
-	Name   string `json:"name"`
-	SiteID string `json:"siteID"`
-	URL    string `json:"url"`
+	OrganizationID string `json:"organizationID,omitempty"`
+	ID             string `json:"id"`
+	Name           string `json:"name"`
+	SiteID         string `json:"siteID"`
+	URL            string `json:"url"`
 }
 type Group struct {
-	ID         string   `json:"id"`
-	Name       string   `json:"name"`
-	MemberIDs  []string `json:"memberIDs"`
-	SiteIDs    []string `json:"siteIDs"`
-	ServiceIDs []string `json:"serviceIDs"`
+	OrganizationID string   `json:"organizationID,omitempty"`
+	ID             string   `json:"id"`
+	Name           string   `json:"name"`
+	MemberIDs      []string `json:"memberIDs"`
+	SiteIDs        []string `json:"siteIDs"`
+	ServiceIDs     []string `json:"serviceIDs"`
 }
 type Invite struct {
-	ID         string    `json:"id"`
-	Username   string    `json:"username"`
-	TokenHash  string    `json:"tokenHash"`
-	CreatedAt  time.Time `json:"createdAt"`
-	ExpiresAt  time.Time `json:"expiresAt"`
-	SiteIDs    []string  `json:"siteIDs"`
-	ServiceIDs []string  `json:"serviceIDs"`
-	GroupIDs   []string  `json:"groupIDs"`
+	OrganizationID string    `json:"organizationID,omitempty"`
+	ID             string    `json:"id"`
+	Username       string    `json:"username"`
+	TokenHash      string    `json:"tokenHash"`
+	CreatedAt      time.Time `json:"createdAt"`
+	ExpiresAt      time.Time `json:"expiresAt"`
+	SiteIDs        []string  `json:"siteIDs"`
+	ServiceIDs     []string  `json:"serviceIDs"`
+	GroupIDs       []string  `json:"groupIDs"`
+}
+type Organization struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+type Role struct {
+	ID             string   `json:"id"`
+	OrganizationID string   `json:"organizationID,omitempty"`
+	Name           string   `json:"name"`
+	Permissions    []string `json:"permissions"`
 }
 type State struct {
-	Groups   []Group   `json:"groups,omitempty"`
-	Invites  []Invite  `json:"invites,omitempty"`
-	Users    []User    `json:"users"`
-	Sites    []Site    `json:"sites"`
-	Services []Service `json:"services"`
+	Organizations []Organization `json:"organizations,omitempty"`
+	Roles         []Role         `json:"roles,omitempty"`
+	Groups        []Group        `json:"groups,omitempty"`
+	Invites       []Invite       `json:"invites,omitempty"`
+	Users         []User         `json:"users"`
+	Sites         []Site         `json:"sites"`
+	Services      []Service      `json:"services"`
 }
 
 func Clone(s State) State {
@@ -95,6 +114,9 @@ func uniqueGrants(ids []string) []string {
 // Validate normalizes empty/duplicate grant lists and rejects malformed state
 // before any write, import or migration can change persistent data.
 func Validate(s *State) error {
+	if err := validateOrganizations(s); err != nil {
+		return err
+	}
 	if s.Users == nil {
 		s.Users = []User{}
 	}
@@ -215,7 +237,7 @@ func Validate(s *State) error {
 			}
 		}
 	}
-	return nil
+	return validateOrganizationReferences(s)
 }
 
 // Issuers are exact identifiers, not normalized origins. Subjects are opaque and

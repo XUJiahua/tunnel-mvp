@@ -161,7 +161,7 @@ func TestPasswordChangeAndReset(t *testing.T) {
 }
 
 func TestLiveWebSocketAndSSERevocation(t *testing.T) {
-	for _, action := range []string{"logout", "password", "grants", "delete", "target", "expiry", "disable", "identity", "session", "group"} {
+	for _, action := range []string{"logout", "password", "grants", "delete", "target", "expiry", "disable", "identity", "session", "group", "role"} {
 		t.Run(action, func(t *testing.T) {
 			f := setup(t)
 			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -192,6 +192,24 @@ func TestLiveWebSocketAndSSERevocation(t *testing.T) {
 			svc := f.service(t, site, "app", upstream.URL)
 			u, login := f.member(t, nil, []string{svc.ID})
 			var group Group
+			var roleID string
+			if action == "role" {
+				res, data := f.request(t, "POST", "/api/roles", map[string]any{"name": "live role", "permissions": []string{"applications:access"}}, f.cookie, "")
+				if res.StatusCode != 201 {
+					t.Fatal(string(data))
+				}
+				role := mustJSON[struct{ ID string }](t, data)
+				roleID = role.ID
+				res, data = f.request(t, "PATCH", "/api/users/"+u.ID+"/role", map[string]string{"roleID": roleID}, f.cookie, "")
+				if res.StatusCode != 200 {
+					t.Fatal(string(data))
+				}
+				res, data = f.request(t, "POST", "/api/login", map[string]string{"username": u.Username, "password": testPassword}, nil, "")
+				if res.StatusCode != 200 {
+					t.Fatal(string(data))
+				}
+				login = res.Cookies()[0]
+			}
 			if action == "group" {
 				res, data := f.request(t, "POST", "/api/groups", map[string]any{"name": "live group", "memberIDs": []string{u.ID}, "serviceIDs": []string{svc.ID}}, f.cookie, "")
 				if res.StatusCode != 201 {
@@ -237,6 +255,8 @@ func TestLiveWebSocketAndSSERevocation(t *testing.T) {
 			reader.ReadString('\n')
 			var res *http.Response
 			switch action {
+			case "role":
+				res, _ = f.request(t, "PATCH", "/api/roles/"+roleID, map[string]any{"name": "revoked role", "permissions": []string{}}, f.cookie, "")
 			case "group":
 				res, _ = f.request(t, "PATCH", "/api/groups/"+group.ID, map[string]any{"name": "live group", "memberIDs": []string{u.ID}, "serviceIDs": []string{}}, f.cookie, "")
 			case "session":

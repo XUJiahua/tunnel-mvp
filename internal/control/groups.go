@@ -19,6 +19,7 @@ func containsID(ids []string, id string) bool {
 	return false
 }
 func effectiveUser(st State, u User) User {
+	u.Permissions = rolePermissions(st, u)
 	u.SiteIDs = append([]string{}, u.SiteIDs...)
 	u.ServiceIDs = append([]string{}, u.ServiceIDs...)
 	for _, g := range st.Groups {
@@ -48,8 +49,8 @@ func (s *Server) cancelUnauthorizedRequests() {
 func (s *Server) listGroups(w http.ResponseWriter, r *http.Request, actor User) {
 	out := []Group{}
 	for _, g := range s.store.snapshot().Groups {
-		if actor.Role == "admin" || containsID(g.MemberIDs, actor.ID) {
-			if actor.Role != "admin" {
+		if canManage(actor, g.OrganizationID, "groups:manage") || containsID(g.MemberIDs, actor.ID) {
+			if !canManage(actor, g.OrganizationID, "groups:manage") {
 				g.MemberIDs = nil
 			}
 			out = append(out, g)
@@ -59,10 +60,11 @@ func (s *Server) listGroups(w http.ResponseWriter, r *http.Request, actor User) 
 }
 func (s *Server) saveGroup(w http.ResponseWriter, r *http.Request, actor User) {
 	var body struct {
-		Name       string   `json:"name"`
-		MemberIDs  []string `json:"memberIDs"`
-		SiteIDs    []string `json:"siteIDs"`
-		ServiceIDs []string `json:"serviceIDs"`
+		Name           string   `json:"name"`
+		OrganizationID string   `json:"organizationID"`
+		MemberIDs      []string `json:"memberIDs"`
+		SiteIDs        []string `json:"siteIDs"`
+		ServiceIDs     []string `json:"serviceIDs"`
 	}
 	if !decode(w, r, &body) {
 		return
@@ -74,7 +76,7 @@ func (s *Server) saveGroup(w http.ResponseWriter, r *http.Request, actor User) {
 	}
 	unlock := s.lockMutation(r)
 	defer unlock()
-	if current, _, ok := s.currentUser(r); !ok || current.Role != "admin" {
+	if current, _, ok := s.currentUser(r); !ok || !hasPermission(current, "groups:manage") {
 		fail(w, 401, "administrator sign in required")
 		return
 	}
@@ -83,7 +85,12 @@ func (s *Server) saveGroup(w http.ResponseWriter, r *http.Request, actor User) {
 	if create {
 		id = randomID()[:16]
 	}
-	out := Group{ID: id, Name: body.Name, MemberIDs: body.MemberIDs, SiteIDs: body.SiteIDs, ServiceIDs: body.ServiceIDs}
+	org, orgErr := selectedOrganization(s.store.snapshot(), actor, body.OrganizationID)
+	if orgErr != nil {
+		fail(w, 400, orgErr.Error())
+		return
+	}
+	out := Group{OrganizationID: org, ID: id, Name: body.Name, MemberIDs: body.MemberIDs, SiteIDs: body.SiteIDs, ServiceIDs: body.ServiceIDs}
 	err := s.store.update(func(st *State) error {
 		if err := validateGrants(st, body.SiteIDs, body.ServiceIDs); err != nil {
 			return err
@@ -104,7 +111,8 @@ func (s *Server) saveGroup(w http.ResponseWriter, r *http.Request, actor User) {
 			return nil
 		}
 		for i := range st.Groups {
-			if st.Groups[i].ID == id {
+			if st.Groups[i].ID == id && canManage(actor, st.Groups[i].OrganizationID, "groups:manage") {
+				out.OrganizationID = st.Groups[i].OrganizationID
 				st.Groups[i] = out
 				return nil
 			}
@@ -126,14 +134,16 @@ func (s *Server) saveGroup(w http.ResponseWriter, r *http.Request, actor User) {
 func (s *Server) deleteGroup(w http.ResponseWriter, r *http.Request, actor User) {
 	unlock := s.lockMutation(r)
 	defer unlock()
-	if current, _, ok := s.currentUser(r); !ok || current.Role != "admin" {
+	if current, _, ok := s.currentUser(r); !ok || !hasPermission(current, "groups:manage") {
 		fail(w, 401, "administrator sign in required")
 		return
 	}
 	id := r.PathValue("id")
+	org := ""
 	err := s.store.update(func(st *State) error {
 		for i, g := range st.Groups {
-			if g.ID == id {
+			if g.ID == id && canManage(actor, g.OrganizationID, "groups:manage") {
+				org = g.OrganizationID
 				st.Groups = append(st.Groups[:i], st.Groups[i+1:]...)
 				for j := range st.Invites {
 					st.Invites[j].GroupIDs = withoutID(st.Invites[j].GroupIDs, id)
@@ -148,7 +158,7 @@ func (s *Server) deleteGroup(w http.ResponseWriter, r *http.Request, actor User)
 		return
 	}
 	s.cancelUnauthorizedRequests()
-	s.audit("group_deleted", actor.Username, "", id)
+	s.audit("group_deleted", actor.Username, "", id, map[string]any{"organizationID": org})
 	jsonOut(w, 200, map[string]bool{"ok": true})
 }
 func withoutID(ids []string, id string) []string {

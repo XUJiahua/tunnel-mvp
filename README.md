@@ -18,6 +18,8 @@
 
 - [多管理员设计](docs/design/administrators.md)与[操作手册](docs/administrator-operations.md)：独立管理员、当前密码验证与最后恢复账号保护。
 
+- [组织与角色设计](docs/design/organizations-roles.md)与[操作手册](docs/organization-operations.md)：组织归属、自定义管理能力、隔离与角色撤销。
+
 ## 已实现
 
 - 控制台登录、管理员 / 成员两种角色、按整站或单独应用分配访问权限；支持直接编辑成员授权、自助改密和管理员重置成员密码。

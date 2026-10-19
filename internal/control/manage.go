@@ -24,7 +24,7 @@ func (s *Server) updateSite(w http.ResponseWriter, r *http.Request, u User) {
 	var out Site
 	err := s.store.update(func(st *State) error {
 		for i := range st.Sites {
-			if st.Sites[i].ID == r.PathValue("id") {
+			if st.Sites[i].ID == r.PathValue("id") && canManage(u, st.Sites[i].OrganizationID, "sites:manage") {
 				st.Sites[i].Name = body.Name
 				out = st.Sites[i]
 				return nil
@@ -60,7 +60,7 @@ func (s *Server) updateService(w http.ResponseWriter, r *http.Request, u User) {
 	changed := false
 	err = s.store.update(func(st *State) error {
 		for i := range st.Services {
-			if st.Services[i].ID == r.PathValue("id") {
+			if st.Services[i].ID == r.PathValue("id") && canManage(u, st.Services[i].OrganizationID, "applications:manage") {
 				changed = st.Services[i].URL != target.String()
 				st.Services[i].Name, st.Services[i].URL = body.Name, target.String()
 				out = st.Services[i]
@@ -129,7 +129,7 @@ func (s *Server) updateUser(w http.ResponseWriter, r *http.Request, actor User) 
 			return err
 		}
 		for i := range st.Users {
-			if st.Users[i].ID == r.PathValue("id") && st.Users[i].Role != "admin" {
+			if st.Users[i].ID == r.PathValue("id") && st.Users[i].Role != "admin" && canManageMember(actor, st.Users[i]) {
 				st.Users[i].SiteIDs, st.Users[i].ServiceIDs = body.SiteIDs, body.ServiceIDs
 				out = st.Users[i]
 				return nil
@@ -183,7 +183,7 @@ func (s *Server) setPassword(w http.ResponseWriter, r *http.Request, actor User,
 		return
 	}
 	target, ok := s.store.user(id)
-	if !ok || (!verify && target.Role == "admin") {
+	if !ok || (!verify && (target.Role == "admin" || !canManageMember(actor, target))) {
 		fail(w, 404, "member not found")
 		return
 	}
