@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 
 	"github.com/gofrs/flock"
 )
@@ -26,11 +27,12 @@ type backend interface {
 	close() error
 }
 type Store struct {
-	mu     sync.RWMutex
-	state  State
-	disk   backend
-	lock   *flock.Flock
-	closed bool
+	queryReadFailures atomic.Uint64
+	mu                sync.RWMutex
+	state             State
+	disk              backend
+	lock              *flock.Flock
+	closed            bool
 }
 
 func Filename(kind string) (string, error) {

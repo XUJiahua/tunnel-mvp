@@ -48,6 +48,7 @@ def verify(directory: Path, version: str | None = None) -> None:
         'docs/design/keycloak-session-sync.md', 'docs/keycloak-sync-operations.md',
         'docs/design/application-oidc.md', 'docs/application-oidc-operations.md',
         'docs/capacity-report.md', 'docs/roadmap.md',
+        'docs/design/user-queries.md', 'docs/user-query-operations.md', 'docs/capacity/user-queries.txt',
         'docs/design/resource-queries.md', 'docs/resource-query-operations.md', 'docs/capacity/resource-queries.txt',
         'docs/design/control-plane-ha.md', 'docs/ha-operations.md', 'docs/e2e-acceptance.md',
         'examples/oidc-app/README.md', 'examples/oidc-app/app.go',

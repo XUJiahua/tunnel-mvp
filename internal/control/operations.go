@@ -228,6 +228,11 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request, _ User) {
 	metric(w, "tunnel_identity_sync_checks_total", "Completed Keycloak user status checks.", "counter", s.stats.identitySyncChecks.Load())
 	metric(w, "tunnel_identity_sync_errors_total", "Keycloak status/token check failures.", "counter", s.stats.identitySyncErrors.Load())
 	metric(w, "tunnel_identity_sync_revocations_total", "OIDC sessions revoked by user status or staleness.", "counter", s.stats.identitySyncRevocations.Load())
+	var readErrors uint64
+	if statistics, ok := s.store.Repository.(interface{ QueryReadFailures() uint64 }); ok {
+		readErrors = statistics.QueryReadFailures()
+	}
+	metric(w, "tunnel_state_query_errors_total", "Failed persistent state projection reads.", "counter", readErrors)
 	metric(w, "tunnel_proxy_requests_total", "Authorized proxy requests.", "counter", s.stats.requests.Load())
 	metric(w, "tunnel_proxy_errors_total", "Proxy transport errors.", "counter", s.stats.errors.Load())
 	metric(w, "tunnel_audit_index_errors_total", "Audit source/index writes or rebuild failures.", "counter", s.stats.auditIndexErrors.Load())

@@ -23,7 +23,11 @@ func (s *Store) SiteByID(id string) (Site, bool, error) {
 		return Site{}, false, fmt.Errorf("state store is closed")
 	}
 	if b, ok := s.disk.(*sqliteBackend); ok {
-		return b.siteByID(id)
+		v, found, err := b.siteByID(id)
+		if err != nil {
+			s.queryReadFailures.Add(1)
+		}
+		return v, found, err
 	}
 	for _, v := range s.state.Sites {
 		if v.ID == id {
@@ -48,7 +52,11 @@ func (s *Store) readService(key string, domain bool) (Service, bool, error) {
 		return Service{}, false, nil
 	}
 	if b, ok := s.disk.(*sqliteBackend); ok {
-		return b.serviceByKey(key, domain)
+		v, found, err := b.serviceByKey(key, domain)
+		if err != nil {
+			s.queryReadFailures.Add(1)
+		}
+		return v, found, err
 	}
 	for _, v := range s.state.Services {
 		if !domain && v.ID == key || domain && v.CustomDomain == key {

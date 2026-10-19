@@ -45,7 +45,16 @@ func openStore(dir, kind, username, password string) (*Store, error) {
 func (s *Store) snapshot() State                    { return s.Snapshot() }
 func (s *Store) update(fn func(*State) error) error { return s.Update(fn) }
 func (s *Store) user(id string) (User, bool) {
-	st := s.snapshot()
+	var st State
+	if reader, ok := s.Repository.(state.UserReader); ok {
+		projection, found, err := reader.UserContext(id)
+		if err != nil || !found {
+			return User{}, false
+		}
+		st = projection
+	} else {
+		st = s.snapshot()
+	}
 	for _, u := range st.Users {
 		if u.ID == id {
 			return effectiveUser(st, u), true

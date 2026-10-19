@@ -32,6 +32,8 @@
 
 - [资源定向查询设计](docs/design/resource-queries.md)与[索引操作](docs/resource-query-operations.md)：SQLite ID/域名点查、提交一致性和局部基准。
 
+- [当前用户鉴权投影](docs/design/user-queries.md)与[查询故障手册](docs/user-query-operations.md)：直接/角色/组授权的一致读取和失败指标。
+
 ## 已实现
 
 - 控制台登录、管理员 / 成员两种角色、按整站或单独应用分配访问权限；支持直接编辑成员授权、自助改密和管理员重置成员密码。
