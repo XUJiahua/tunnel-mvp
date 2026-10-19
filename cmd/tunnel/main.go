@@ -110,6 +110,7 @@ func newRootCommand() *cobra.Command {
 		if err != nil {
 			return err
 		}
+		c.RuntimeVersion = version
 		logging(c.Logging)
 		if _, err = agent.NewPolicy(c.Allow); err != nil {
 			return err
@@ -123,11 +124,16 @@ func newRootCommand() *cobra.Command {
 			if path == "" && os.Getenv("TUNNEL_CONFIG") == "" {
 				return fmt.Errorf("--watch-config requires --config or TUNNEL_CONFIG")
 			}
-			return agent.RunWatched(cmd.Context(), c, os.Getenv("TUNNEL_AGENT_TOKEN"), func() (config.Agent, error) { return config.AgentFrom(path, cmd.Flags()) })
+			return agent.RunWatched(cmd.Context(), c, os.Getenv("TUNNEL_AGENT_TOKEN"), func() (config.Agent, error) {
+				next, err := config.AgentFrom(path, cmd.Flags())
+				next.RuntimeVersion = version
+				return next, err
+			})
 		}
 		return agent.Run(cmd.Context(), c, os.Getenv("TUNNEL_AGENT_TOKEN"))
 	}}
 	agentCommand.PersistentFlags().String("server-url", "http://localhost:8080", "Public control plane origin")
+	agentCommand.PersistentFlags().String("instance-id", "", "Registered Agent instance ID; empty selects legacy site-token mode")
 	agentCommand.PersistentFlags().String("site-id", "", "Registered site ID")
 	agentCommand.PersistentFlags().String("allow", "", "Agent ACL rules as a JSON array (or TUNNEL_ALLOW)")
 	agentCommand.Flags().Bool("watch-config", false, "Reload valid ACL file changes every 2s; reconnects the tunnel")

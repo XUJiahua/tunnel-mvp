@@ -58,10 +58,12 @@ type Rule struct {
 	Ports []int  `json:"ports" mapstructure:"ports"`
 }
 type Agent struct {
-	Logging   `mapstructure:",squash"`
-	ServerURL string `json:"serverURL" mapstructure:"serverURL"`
-	SiteID    string `json:"siteID" mapstructure:"siteID"`
-	Allow     []Rule `json:"allow" mapstructure:"allow"`
+	InstanceID     string `json:"instanceID,omitempty" mapstructure:"instanceID"`
+	RuntimeVersion string `json:"-" mapstructure:"-"`
+	Logging        `mapstructure:",squash"`
+	ServerURL      string `json:"serverURL" mapstructure:"serverURL"`
+	SiteID         string `json:"siteID" mapstructure:"siteID"`
+	Allow          []Rule `json:"allow" mapstructure:"allow"`
 }
 
 func Origin(raw string) (*url.URL, error) {
@@ -160,6 +162,9 @@ func (a *Agent) Validate() error {
 		return err
 	}
 	a.ServerURL = origin.String()
+	if a.InstanceID != "" && !state.ValidAgentID(a.InstanceID) {
+		return fmt.Errorf("invalid registered Agent instance ID")
+	}
 	if a.SiteID == "" {
 		return fmt.Errorf("siteID is required (config, TUNNEL_SITE_ID or --site-id)")
 	}

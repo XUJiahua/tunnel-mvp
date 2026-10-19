@@ -32,7 +32,7 @@ func (s *Server) serviceTransport(svc Service) *http.Transport {
 	if p, ok := s.pools[svc.ID]; ok {
 		p.transport.CloseIdleConnections()
 	}
-	t := s.transport(svc.SiteID)
+	t := s.transport(svc.SiteID, svc.ID)
 	t.MaxIdleConns = 32
 	t.MaxIdleConnsPerHost = 16
 	t.MaxConnsPerHost = 64
@@ -171,12 +171,13 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request, _ User) {
 	s.liveMu.Unlock()
 	metric(w, "tunnel_active_requests", "Active proxy requests and manual probes.", "gauge", active)
 	fmt.Fprint(w, "# HELP tunnel_site_online Agent tunnel connected.\n# TYPE tunnel_site_online gauge\n")
+	fmt.Fprint(w, "# HELP tunnel_site_agents Connected Agent instances.\n# TYPE tunnel_site_agents gauge\n")
 	for _, site := range s.store.snapshot().Sites {
 		online := 0
-		if s.tunnel.HasSession(site.ID) {
+		if s.siteOnline(site.ID) {
 			online = 1
 		}
-		fmt.Fprintf(w, "tunnel_site_online{site_id=%q} %d\n", site.ID, online)
+		fmt.Fprintf(w, "tunnel_site_online{site_id=%q} %d\ntunnel_site_agents{site_id=%q} %d\n", site.ID, online, site.ID, len(s.connectedAgents(site.ID)))
 	}
 	s.monitorMu.Lock()
 	defer s.monitorMu.Unlock()

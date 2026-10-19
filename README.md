@@ -347,3 +347,5 @@ make release-snapshot
 本地和 CI 固定使用 GoReleaser v2.17.1，`make release-check` 检查版本与配置。
 
 快照包输出到 `dist/`，不创建远端标签、不上传 Release。生产包由 CI 的 `goreleaser release --clean` 生成。
+
+Agent 多实例：[设计](docs/design/agent-instances.md) · [登记、切换和凭据操作](docs/agent-operations.md)。

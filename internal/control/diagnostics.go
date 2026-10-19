@@ -54,11 +54,18 @@ func (s *Server) authenticatedAgent(r *http.Request) (string, bool) {
 	id := r.Header.Get("X-Tunnel-Site")
 	site, ok := s.store.site(id)
 	authorization := r.Header.Get("Authorization")
-	if !strings.HasPrefix(authorization, "Bearer ") {
+	if !ok || !strings.HasPrefix(authorization, "Bearer ") {
 		return id, false
 	}
-	return id, ok && constantEqual(site.TokenHash, digest(strings.TrimPrefix(authorization, "Bearer ")))
+	hash := digest(strings.TrimPrefix(authorization, "Bearer "))
+	instance := r.Header.Get("X-Tunnel-Instance")
+	if instance == "" {
+		return id, !site.LegacyDisabled && constantEqual(site.TokenHash, hash)
+	}
+	a, found := s.store.agent(instance)
+	return id, found && a.SiteID == id && !a.Disabled && constantEqual(a.TokenHash, hash)
 }
+
 func (s *Server) receiveDiagnostic(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		fail(w, 405, "POST required")
@@ -77,6 +84,10 @@ func (s *Server) receiveDiagnostic(w http.ResponseWriter, r *http.Request) {
 	if err != nil || len(rawID) != 8 || failure.Code == "" || len(failure.Code) > 40 || len(failure.Stage) > 40 || len(failure.Message) > 4096 || len(failure.Target) > 1024 || len(failure.ResolvedIPs) > 64 || len(failure.Attempts) > 64 {
 		fail(w, 400, "invalid diagnostic report")
 		return
+	}
+	failure.AgentInstanceID = r.Header.Get("X-Tunnel-Instance")
+	if failure.AgentInstanceID == "" {
+		failure.AgentInstanceID = "legacy"
 	}
 	s.diagnosticMu.Lock()
 	defer s.diagnosticMu.Unlock()

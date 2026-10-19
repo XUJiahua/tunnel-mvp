@@ -11,22 +11,38 @@ import (
 
 func (s *Server) updateSite(w http.ResponseWriter, r *http.Request, u User) {
 	var body struct {
-		Name string `json:"name"`
+		Name           *string `json:"name"`
+		LegacyDisabled *bool   `json:"legacyDisabled"`
 	}
 	if !decode(w, r, &body) {
 		return
 	}
-	body.Name = strings.TrimSpace(body.Name)
-	if body.Name == "" || len(body.Name) > 100 {
-		fail(w, 400, "name must be 1–100 bytes")
+	if body.Name == nil && body.LegacyDisabled == nil {
+		fail(w, 400, "name or legacyDisabled required")
 		return
 	}
+	if body.Name != nil {
+		name := strings.TrimSpace(*body.Name)
+		if name == "" || len(name) > 100 {
+			fail(w, 400, "name must be 1–100 bytes")
+			return
+		}
+		body.Name = &name
+	}
 	var out Site
+	closeLegacy := false
 	err := s.store.update(func(st *State) error {
 		for i := range st.Sites {
-			if st.Sites[i].ID == r.PathValue("id") && canManage(u, st.Sites[i].OrganizationID, "sites:manage") {
-				st.Sites[i].Name = body.Name
-				out = st.Sites[i]
+			site := &st.Sites[i]
+			if site.ID == r.PathValue("id") && canManage(u, site.OrganizationID, "sites:manage") {
+				if body.Name != nil {
+					site.Name = *body.Name
+				}
+				if body.LegacyDisabled != nil {
+					closeLegacy = *body.LegacyDisabled && !site.LegacyDisabled
+					site.LegacyDisabled = *body.LegacyDisabled
+				}
+				out = *site
 				return nil
 			}
 		}
@@ -36,10 +52,14 @@ func (s *Server) updateSite(w http.ResponseWriter, r *http.Request, u User) {
 		fail(w, 400, err.Error())
 		return
 	}
+	if closeLegacy {
+		s.disconnectAgent(out.ID, "")
+	}
 	out.TokenHash = ""
 	s.audit("site_updated", u.Username, out.ID, "")
 	jsonOut(w, 200, out)
 }
+
 func (s *Server) updateService(w http.ResponseWriter, r *http.Request, u User) {
 	var body struct {
 		Name                 string  `json:"name"`

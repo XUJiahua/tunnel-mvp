@@ -35,6 +35,7 @@ type User struct {
 	ServiceIDs     []string  `json:"serviceIDs"`
 }
 type Site struct {
+	LegacyDisabled bool      `json:"legacyDisabled,omitempty"`
 	OrganizationID string    `json:"organizationID,omitempty"`
 	ID             string    `json:"id"`
 	Name           string    `json:"name"`
@@ -82,13 +83,14 @@ type Role struct {
 	Permissions    []string `json:"permissions"`
 }
 type State struct {
-	Organizations []Organization `json:"organizations,omitempty"`
-	Roles         []Role         `json:"roles,omitempty"`
-	Groups        []Group        `json:"groups,omitempty"`
-	Invites       []Invite       `json:"invites,omitempty"`
-	Users         []User         `json:"users"`
-	Sites         []Site         `json:"sites"`
-	Services      []Service      `json:"services"`
+	Agents        []AgentRegistration `json:"agents,omitempty"`
+	Organizations []Organization      `json:"organizations,omitempty"`
+	Roles         []Role              `json:"roles,omitempty"`
+	Groups        []Group             `json:"groups,omitempty"`
+	Invites       []Invite            `json:"invites,omitempty"`
+	Users         []User              `json:"users"`
+	Sites         []Site              `json:"sites"`
+	Services      []Service           `json:"services"`
 }
 
 func Clone(s State) State {
@@ -244,6 +246,9 @@ func Validate(s *State) error {
 				return fmt.Errorf("unknown invitation group %q", id)
 			}
 		}
+	}
+	if err := validateAgents(s); err != nil {
+		return err
 	}
 	return validateOrganizationReferences(s)
 }

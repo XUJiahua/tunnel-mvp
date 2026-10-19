@@ -151,7 +151,7 @@ func Run(ctx context.Context, c config.Agent, token string) error {
 	report, closeReporter := newReporter(ctx, c, token)
 	defer closeReporter()
 	p.report = report
-	slog.Info("agent configuration loaded", "site_id", c.SiteID, "server", c.ServerURL, "allow", c.Allow)
+	slog.Info("agent configuration loaded", "site_id", c.SiteID, "instance_id", c.InstanceID, "server", c.ServerURL, "allow", c.Allow)
 	u, err := config.Origin(c.ServerURL)
 	if err != nil {
 		return err
@@ -165,7 +165,7 @@ func Run(ctx context.Context, c config.Agent, token string) error {
 		u.Scheme = "ws"
 	}
 	u.Path = "/tunnel/connect"
-	headers := http.Header{"Authorization": []string{"Bearer " + token}, "X-Tunnel-Site": []string{c.SiteID}}
+	headers := http.Header{"Authorization": []string{"Bearer " + token}, "X-Tunnel-Site": []string{c.SiteID}, "X-Tunnel-Instance": []string{c.InstanceID}, "X-Tunnel-Version": []string{c.RuntimeVersion}}
 	dialer := &websocket.Dialer{Proxy: http.ProxyFromEnvironment, HandshakeTimeout: 15 * time.Second}
 	delay := time.Second
 	for ctx.Err() == nil {

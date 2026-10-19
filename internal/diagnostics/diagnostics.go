@@ -19,14 +19,15 @@ type Attempt struct {
 	Error   string `json:"error,omitempty"`
 }
 type Failure struct {
-	Code           string    `json:"code"`
-	Stage          string    `json:"stage"`
-	Message        string    `json:"message"`
-	Hint           string    `json:"hint"`
-	AgentRequestID string    `json:"agentRequestID,omitempty"`
-	Target         string    `json:"target,omitempty"`
-	ResolvedIPs    []string  `json:"resolvedIPs,omitempty"`
-	Attempts       []Attempt `json:"attempts,omitempty"`
+	AgentInstanceID string    `json:"agentInstanceID,omitempty"`
+	Code            string    `json:"code"`
+	Stage           string    `json:"stage"`
+	Message         string    `json:"message"`
+	Hint            string    `json:"hint"`
+	AgentRequestID  string    `json:"agentRequestID,omitempty"`
+	Target          string    `json:"target,omitempty"`
+	ResolvedIPs     []string  `json:"resolvedIPs,omitempty"`
+	Attempts        []Attempt `json:"attempts,omitempty"`
 }
 
 const marker = "tunnel1 "

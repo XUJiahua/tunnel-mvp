@@ -195,6 +195,15 @@ func pruneGrantReferences(st *State) {
 		}
 		return out
 	}
+	agents := []state.AgentRegistration{}
+	for _, a := range st.Agents {
+		if sites[a.SiteID] {
+			agents = append(agents, a)
+		}
+	}
+	if len(st.Agents) > 0 {
+		st.Agents = agents
+	}
 	for i := range st.Users {
 		st.Users[i].SiteIDs = filter(st.Users[i].SiteIDs, sites)
 		st.Users[i].ServiceIDs = filter(st.Users[i].ServiceIDs, services)

@@ -35,7 +35,7 @@ func (s *Server) launch(w http.ResponseWriter, r *http.Request, u User) {
 		fail(w, 404, "service not found")
 		return
 	}
-	if !s.tunnel.HasSession(svc.SiteID) {
+	if !s.siteOnline(svc.SiteID) {
 		fail(w, 503, "site is offline")
 		return
 	}
@@ -118,7 +118,7 @@ func (s *Server) gateway(w http.ResponseWriter, r *http.Request) {
 		fail(w, 401, "access expired; reopen from console")
 		return
 	}
-	if !s.tunnel.HasSession(svc.SiteID) {
+	if !s.siteOnline(svc.SiteID) {
 		fail(w, 503, "site is offline")
 		return
 	}
@@ -201,12 +201,15 @@ func (s *Server) gateway(w http.ResponseWriter, r *http.Request) {
 	s.audit("proxy_request", u.Username, svc.SiteID, svc.ID)
 	proxy.ServeHTTP(w, r)
 }
-func (s *Server) transport(siteID string) *http.Transport {
-	remote := s.tunnel.Dialer(siteID)
+func (s *Server) transport(siteID string, serviceIDs ...string) *http.Transport {
+	serviceID := ""
+	if len(serviceIDs) > 0 {
+		serviceID = serviceIDs[0]
+	}
 	return &http.Transport{Proxy: nil, DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 		ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
-		return remote(ctx, network, addr)
+		return s.dialSite(ctx, siteID, serviceID, network, addr)
 	}, TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12}, TLSHandshakeTimeout: 10 * time.Second, ResponseHeaderTimeout: 30 * time.Second, IdleConnTimeout: 30 * time.Second, MaxIdleConnsPerHost: 4, ForceAttemptHTTP2: false}
 }
 func (s *Server) probe(w http.ResponseWriter, r *http.Request, u User) {
@@ -241,7 +244,7 @@ func (s *Server) checkService(parent context.Context, svc Service) probeReport {
 	report := newReport(svc)
 	start := time.Now()
 	defer func() { s.stats.probes.Add(1) }()
-	if !s.tunnel.HasSession(svc.SiteID) {
+	if !s.siteOnline(svc.SiteID) {
 		report.Failure = diagnostics.New("site_offline", "tunnel", "site Agent is not connected")
 		return report
 	}

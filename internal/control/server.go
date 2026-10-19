@@ -53,7 +53,8 @@ type Server struct {
 	tunnelMu        sync.Mutex
 	tunnelWG        sync.WaitGroup
 	closing         bool
-	connections     map[string]context.CancelFunc
+	connections     map[string]*agentConnection
+	routes          map[string]uint64
 }
 
 func New(c config.Server, password string) (*Server, error) {
@@ -75,7 +76,7 @@ func New(c config.Server, password string) (*Server, error) {
 	p, _ := url.Parse(c.PublicURL)
 	a, _ := url.Parse(c.AccessURL)
 	h, _ := bcrypt.GenerateFromPassword([]byte(randomID()), bcrypt.DefaultCost)
-	s := &Server{cfg: c, store: st, auth: newAuth(), secure: p.Scheme == "https", public: p, access: a, auditFile: af, dummyHash: string(h), connections: map[string]context.CancelFunc{}, live: map[string]liveRequest{}, pools: map[string]pooledTransport{}, reports: map[string]probeReport{}, metricsToken: os.Getenv("TUNNEL_METRICS_TOKEN"), diagnosticCache: map[string]diagnosticRecord{}}
+	s := &Server{cfg: c, store: st, auth: newAuth(), secure: p.Scheme == "https", public: p, access: a, auditFile: af, dummyHash: string(h), connections: map[string]*agentConnection{}, routes: map[string]uint64{}, live: map[string]liveRequest{}, pools: map[string]pooledTransport{}, reports: map[string]probeReport{}, metricsToken: os.Getenv("TUNNEL_METRICS_TOKEN"), diagnosticCache: map[string]diagnosticRecord{}}
 	for _, svc := range st.snapshot().Services {
 		if err := s.validateDomain(User{Role: "admin"}, svc.CustomDomain); err != nil {
 			af.Close()
@@ -107,7 +108,7 @@ func New(c config.Server, password string) (*Server, error) {
 		return nil, err
 	}
 	s.tunnel = remotedialer.New(func(r *http.Request) (string, bool, error) {
-		id, ok := s.authenticatedAgent(r)
+		id, ok := s.authenticatedTunnel(r)
 		return id, ok, nil
 	}, func(w http.ResponseWriter, r *http.Request, code int, err error) {
 		fail(w, code, "tunnel authentication or handshake failed")
@@ -138,8 +139,9 @@ func (s *Server) Close() {
 	s.poolMu.Unlock()
 	s.tunnelMu.Lock()
 	s.closing = true
-	for _, cancel := range s.connections {
-		cancel()
+	for _, connection := range s.connections {
+		connection.closing.Store(true)
+		connection.cancel()
 	}
 	s.tunnelMu.Unlock()
 	s.tunnelWG.Wait()
@@ -198,8 +200,9 @@ func (s *Server) Run(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			s.tunnelMu.Lock()
-			for _, cancel := range s.connections {
-				cancel()
+			for _, connection := range s.connections {
+				connection.closing.Store(true)
+				connection.cancel()
 			}
 			s.tunnelMu.Unlock()
 			stop, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -217,6 +220,12 @@ func (s *Server) Run(ctx context.Context) error {
 }
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/agents", s.require(false, s.listAgents))
+	mux.HandleFunc("GET /api/sites/{id}/agents", s.require(false, s.listAgents))
+	mux.HandleFunc("POST /api/sites/{id}/agents", s.require(true, s.createAgent))
+	mux.HandleFunc("PATCH /api/sites/{id}/agents/{agentID}", s.require(true, s.manageAgent))
+	mux.HandleFunc("DELETE /api/sites/{id}/agents/{agentID}", s.require(true, s.manageAgent))
+	mux.HandleFunc("POST /api/sites/{id}/agents/{agentID}/rotate", s.require(true, s.manageAgent))
 	mux.HandleFunc("GET /api/services/{id}/history", s.require(false, s.serviceHistory))
 	mux.HandleFunc("POST /api/services/bulk", s.require(true, s.bulkCreate))
 	mux.HandleFunc("POST /api/services/bulk-delete", s.require(true, s.bulkServices))
@@ -363,10 +372,18 @@ func (s *Server) connect(w http.ResponseWriter, r *http.Request) {
 		fail(w, 403, "agent connections only")
 		return
 	}
-	id, ok := s.authenticatedAgent(r)
+	siteID, ok := s.authenticatedAgent(r)
 	if !ok {
-		fail(w, 401, "invalid site credentials")
+		fail(w, 401, "invalid site/instance credentials")
 		return
+	}
+	instance := r.Header.Get("X-Tunnel-Instance")
+	key := agentKey(siteID, instance)
+	site, _ := s.store.site(siteID)
+	remote, _, _ := net.SplitHostPort(r.RemoteAddr)
+	version := r.Header.Get("X-Tunnel-Version")
+	if len(version) > 128 {
+		version = version[:128]
 	}
 	s.tunnelMu.Lock()
 	if s.closing {
@@ -374,35 +391,42 @@ func (s *Server) connect(w http.ResponseWriter, r *http.Request) {
 		fail(w, 503, "server shutting down")
 		return
 	}
-	if _, exists := s.connections[id]; exists {
+	if _, exists := s.connections[key]; exists {
 		s.tunnelMu.Unlock()
-		fail(w, 409, "site already connected")
+		fail(w, 409, "Agent instance already connected")
 		return
 	}
 	ctx, cancel := context.WithCancel(r.Context())
-	s.connections[id] = cancel
+	connection := &agentConnection{key: key, siteID: siteID, instanceID: instance, organizationID: site.OrganizationID, remoteIP: remote, version: version, connectedAt: time.Now().UTC(), cancel: cancel}
+	s.connections[key] = connection
 	s.tunnelWG.Add(1)
 	s.tunnelMu.Unlock()
 	defer s.tunnelWG.Done()
 	defer func() {
+		connection.closing.Store(true)
 		cancel()
 		s.tunnelMu.Lock()
-		delete(s.connections, id)
+		delete(s.connections, key)
 		s.tunnelMu.Unlock()
-		s.dropSiteTransports(id)
-		s.audit("agent_disconnected", "", id, "")
+		s.dropSiteTransports(siteID)
+		s.audit("agent_disconnected", "", siteID, "", map[string]any{"instanceID": instance, "organizationID": site.OrganizationID})
 	}()
-	s.audit("agent_connected", "", id, "")
+	s.audit("agent_connected", "", siteID, "", map[string]any{"instanceID": instance, "organizationID": site.OrganizationID})
 	s.tunnel.ServeHTTP(&tunnelWriter{ResponseWriter: w, ctx: ctx}, r.WithContext(ctx))
 }
 func (s *Server) disconnect(id string) {
 	s.dropSiteTransports(id)
 	s.tunnelMu.Lock()
-	if cancel := s.connections[id]; cancel != nil {
-		cancel()
+	for _, c := range s.connections {
+		if c.siteID == id {
+			c.closing.Store(true)
+			c.cancel()
+		}
 	}
+	delete(s.routes, id)
 	s.tunnelMu.Unlock()
 }
+
 func (s *Server) listSites(w http.ResponseWriter, r *http.Request, u User) {
 	out := []map[string]any{}
 	state := s.store.snapshot()
@@ -415,7 +439,7 @@ func (s *Server) listSites(w http.ResponseWriter, r *http.Request, u User) {
 			}
 		}
 		if visible {
-			out = append(out, map[string]any{"id": site.ID, "name": site.Name, "createdAt": site.CreatedAt, "organizationID": site.OrganizationID, "online": s.tunnel.HasSession(site.ID)})
+			out = append(out, map[string]any{"id": site.ID, "name": site.Name, "createdAt": site.CreatedAt, "organizationID": site.OrganizationID, "legacyDisabled": site.LegacyDisabled, "agentCount": len(s.connectedAgents(site.ID)), "online": s.siteOnline(site.ID)})
 		}
 	}
 	jsonOut(w, 200, out)
@@ -512,6 +536,13 @@ func (s *Server) rotateSite(w http.ResponseWriter, r *http.Request, u User) {
 		for i, v := range st.Sites {
 			if v.ID == id && canManage(u, v.OrganizationID, "sites:manage") {
 				st.Sites[i].TokenHash = digest(token)
+				for j := range st.Agents {
+					if st.Agents[j].SiteID == id {
+						st.Agents[j].TokenHash = digest(randomID())
+						st.Agents[j].Disabled = true
+						st.Agents[j].RequiresRotation = true
+					}
+				}
 				return nil
 			}
 		}

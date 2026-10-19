@@ -47,8 +47,8 @@ func runWatched(ctx context.Context, initial config.Agent, token string, load fu
 			if err == nil {
 				_, err = NewPolicy(next.Allow)
 			}
-			if err == nil && (next.SiteID != current.SiteID || next.ServerURL != current.ServerURL) {
-				err = fmt.Errorf("siteID/serverURL changes require a process restart")
+			if err == nil && (next.SiteID != current.SiteID || next.ServerURL != current.ServerURL || next.InstanceID != current.InstanceID) {
+				err = fmt.Errorf("siteID/serverURL/instanceID changes require a process restart")
 			}
 			if err != nil {
 				if err.Error() != lastError {

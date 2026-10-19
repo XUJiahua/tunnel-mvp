@@ -71,7 +71,7 @@ func TestOrganizationBoundariesAndRoleRevocation(t *testing.T) {
 	}
 	ga, gb := group(a, []string{peer.ID}), group(b, []string{other.ID})
 	inv := mustJSON[struct{ Invitation inviteView }](t, create("/invitations", map[string]string{"username": "invited-b", "organizationID": b}, f.cookie)).Invitation
-	for _, path := range []string{"/api/sites", "/api/services", "/api/users", "/api/groups", "/api/invitations", "/api/roles", "/api/organizations", "/api/group-members"} {
+	for _, path := range []string{"/api/sites", "/api/services", "/api/users", "/api/groups", "/api/invitations", "/api/roles", "/api/organizations", "/api/group-members", "/api/agents"} {
 		res, body = f.request(t, "GET", path, nil, ownerCookie, "")
 		if res.StatusCode != 200 || strings.Contains(string(body), b) || strings.Contains(string(body), other.ID) || strings.Contains(string(body), foreign.ID) {
 			t.Fatalf("cross-org listing %s: %d %s", path, res.StatusCode, body)
@@ -86,6 +86,7 @@ func TestOrganizationBoundariesAndRoleRevocation(t *testing.T) {
 		{"POST", "/api/services/bulk-move", map[string]any{"ids": []string{app.ID, foreign.ID}, "siteID": sa}},
 		{"POST", "/api/services/bulk", map[string]any{"services": []map[string]string{{"name": "bad bulk", "siteID": sb, "url": upstream.URL}}}},
 		{"PATCH", "/api/services/" + app.ID, map[string]string{"name": app.Name, "url": app.URL, "customDomain": "steal.customer.test"}},
+		{"POST", "/api/sites/" + sb + "/agents", map[string]string{"name": "foreign"}},
 		{"PATCH", "/api/sites/" + sb, map[string]string{"name": "stolen"}},
 		{"DELETE", "/api/sites/" + sb, nil}, {"POST", "/api/sites/" + sb + "/rotate", nil},
 		{"PATCH", "/api/services/" + foreign.ID, map[string]string{"name": "stolen", "url": upstream.URL}},

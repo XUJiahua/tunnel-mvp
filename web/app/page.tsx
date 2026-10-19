@@ -9,6 +9,7 @@ import {
   useState,
 } from "react";
 
+import { AgentsPanel } from "./agents";
 import { MonitoringHistory } from "./history";
 import { BulkApplications } from "./bulk";
 import { OrganizationsPanel } from "./organizations";
@@ -34,6 +35,8 @@ type User = {
   sessionMethod?: string;
 };
 type Site = {
+  legacyDisabled?: boolean;
+  agentCount?: number;
   organizationID?: string;
   id: string;
   name: string;
@@ -64,6 +67,7 @@ type Probe = {
   hint?: string;
   requestID?: string;
   agentRequestID?: string;
+  agentInstanceID?: string;
   siteID?: string;
   target?: string;
   checkedAt?: string;
@@ -507,6 +511,7 @@ export default function Home() {
     sites: ["站点", "连接你的数据面，建立安全的出站隧道。"],
     services: ["应用", "从这里进入已授权的内网服务。"],
     users: ["访问权限", "为成员分配整站或单独应用访问权限。"],
+    agents: ["Agent 实例", "独立凭据、连接归属与故障切换。"],
     history: ["监控历史", "业务健康与响应延迟，按应用授权可见。"],
     bulk: ["批量应用", "批量创建、迁移或删除同组织应用。"],
     organizations: ["组织与角色", "设置组织边界、管理能力和角色成员。"],
@@ -833,6 +838,9 @@ export default function Home() {
             ["services", "apps", "应用"],
             ["sessions", "shield", "登录设备"],
             ["history", "grid", "监控历史"],
+            ...(permitted("sites:manage")
+              ? [["agents", "server", "Agent 实例"]]
+              : []),
             ...(permitted("members:manage")
               ? [["users", "users", "访问权限"]]
               : []),
@@ -1120,6 +1128,13 @@ export default function Home() {
               onChanged={() => refresh(user)}
             />
           )}
+          {tab === "agents" && permitted("sites:manage") && (
+            <AgentsPanel
+              key={organization}
+              sites={sites}
+              reload={() => refresh(user)}
+            />
+          )}
           {tab === "history" && (
             <MonitoringHistory
               services={services.filter(
@@ -1376,6 +1391,11 @@ export default function Home() {
                   <code>{diagnostic.result.requestID}</code>
                 </dd>
               </>
+            )}
+            {diagnostic.result.agentInstanceID && (
+              <p>
+                Agent 实例：<code>{diagnostic.result.agentInstanceID}</code>
+              </p>
             )}
             {diagnostic.result.agentRequestID && (
               <>
