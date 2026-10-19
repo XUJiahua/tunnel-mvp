@@ -42,11 +42,11 @@ flowchart TB
 
 从 [GitHub Releases](https://github.com/XUJiahua/tunnel-mvp/releases) 下载对应平台的压缩包，无需安装 Go 或 Node.js。
 
-| 系统 | 架构 | v0.1.0 文件 |
+| 系统 | 架构 | v0.1.1 文件 |
 | --- | --- | --- |
-| Linux | amd64 / arm64 | `tunnel_0.1.0_linux_<架构>.tar.gz` |
-| macOS | amd64 / arm64 | `tunnel_0.1.0_darwin_<架构>.tar.gz` |
-| Windows | amd64 / arm64 | `tunnel_0.1.0_windows_<架构>.zip` |
+| Linux | amd64 / arm64 | `tunnel_0.1.1_linux_<架构>.tar.gz` |
+| macOS | amd64 / arm64 | `tunnel_0.1.1_darwin_<架构>.tar.gz` |
+| Windows | amd64 / arm64 | `tunnel_0.1.1_windows_<架构>.zip` |
 
 压缩包包含二进制、README、更新说明与 `examples/`，前端已嵌入二进制。Linux / macOS 解压后运行 `./tunnel version`，Windows 运行 `.\tunnel.exe version`。Apple Silicon 选择 `darwin_arm64`，Intel Mac 选择 `darwin_amd64`。macOS 产物暂未签名和公证。
 
@@ -56,10 +56,10 @@ flowchart TB
 # Linux（只检查已下载的文件）
 sha256sum --check --ignore-missing checksums.txt
 # macOS（对照 checksums.txt 中对应条目）
-shasum -a 256 tunnel_0.1.0_darwin_arm64.tar.gz
+shasum -a 256 tunnel_0.1.1_darwin_arm64.tar.gz
 ```
 
-Windows 可用 `Get-FileHash .\tunnel_0.1.0_windows_amd64.zip -Algorithm SHA256` 对照校验文件。
+Windows 可用 `Get-FileHash .\tunnel_0.1.1_windows_amd64.zip -Algorithm SHA256` 对照校验文件。
 
 随后参照下文配置 Server / Agent；使用下载产物时将 `./bin/tunnel` 替换为 `./tunnel`（Windows 为 `.\tunnel.exe`）。
 
