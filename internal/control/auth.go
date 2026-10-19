@@ -68,12 +68,12 @@ func (a *authState) clean(now time.Time) { // caller holds mu
 		}
 	}
 	for k, v := range a.tickets {
-		if now.After(v.Expires) {
+		if _, ok := a.sessions[v.SessionKey]; !ok || now.After(v.Expires) {
 			delete(a.tickets, k)
 		}
 	}
 	for k, v := range a.access {
-		if now.After(v.Expires) {
+		if _, ok := a.sessions[v.SessionKey]; !ok || now.After(v.Expires) {
 			delete(a.access, k)
 		}
 	}
@@ -99,6 +99,8 @@ func (s *Server) currentUser(r *http.Request) (User, string, bool) {
 	return u, key, ok
 }
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {
+	s.accessMu.RLock()
+	defer s.accessMu.RUnlock()
 	var body struct {
 		Username string `json:"username"`
 		Password string `json:"password"`

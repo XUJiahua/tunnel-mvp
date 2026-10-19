@@ -24,6 +24,18 @@ import (
 )
 
 type Server struct {
+	accessMu         sync.RWMutex
+	liveMu           sync.Mutex
+	live             map[string]liveRequest
+	poolMu           sync.Mutex
+	pools            map[string]pooledTransport
+	monitorMu        sync.Mutex
+	reports          map[string]probeReport
+	backgroundCancel context.CancelFunc
+	backgroundWG     sync.WaitGroup
+	metricsToken     string
+	stats            counters
+
 	diagnosticMu    sync.Mutex
 	diagnosticCache map[string]diagnosticRecord
 	cfg             config.Server
@@ -56,16 +68,30 @@ func New(c config.Server, password string) (*Server, error) {
 	p, _ := url.Parse(c.PublicURL)
 	a, _ := url.Parse(c.AccessURL)
 	h, _ := bcrypt.GenerateFromPassword([]byte(randomID()), bcrypt.DefaultCost)
-	s := &Server{cfg: c, store: st, auth: newAuth(), secure: p.Scheme == "https", public: p, access: a, auditFile: af, dummyHash: string(h), connections: map[string]context.CancelFunc{}, diagnosticCache: map[string]diagnosticRecord{}}
+	s := &Server{cfg: c, store: st, auth: newAuth(), secure: p.Scheme == "https", public: p, access: a, auditFile: af, dummyHash: string(h), connections: map[string]context.CancelFunc{}, live: map[string]liveRequest{}, pools: map[string]pooledTransport{}, reports: map[string]probeReport{}, metricsToken: os.Getenv("TUNNEL_METRICS_TOKEN"), diagnosticCache: map[string]diagnosticRecord{}}
 	s.tunnel = remotedialer.New(func(r *http.Request) (string, bool, error) {
 		id, ok := s.authenticatedAgent(r)
 		return id, ok, nil
 	}, func(w http.ResponseWriter, r *http.Request, code int, err error) {
 		fail(w, code, "tunnel authentication or handshake failed")
 	})
+	if len(s.metricsToken) > 0 && len(s.metricsToken) < 32 {
+		af.Close()
+		return nil, fmt.Errorf("TUNNEL_METRICS_TOKEN must contain at least 32 bytes")
+	}
+	s.startBackground()
 	return s, nil
 }
 func (s *Server) Close() {
+	s.backgroundCancel()
+	s.backgroundWG.Wait()
+	s.cancelRequests(func(liveRequest) bool { return true })
+	s.poolMu.Lock()
+	for id, p := range s.pools {
+		p.transport.CloseIdleConnections()
+		delete(s.pools, id)
+	}
+	s.poolMu.Unlock()
 	s.tunnelMu.Lock()
 	s.closing = true
 	for _, cancel := range s.connections {
@@ -80,6 +106,9 @@ func (s *Server) Close() {
 func (s *Server) audit(event, user, site, resource string, fields ...map[string]any) {
 	s.auditMu.Lock()
 	defer s.auditMu.Unlock()
+	if err := s.rotateAudit(); err != nil {
+		s.logRotationError(err)
+	}
 	entry := map[string]any{"time": time.Now().UTC(), "event": event, "user": user, "siteID": site, "resourceID": resource}
 	for _, values := range fields {
 		for key, value := range values {
@@ -119,14 +148,15 @@ func (s *Server) Run(ctx context.Context) error {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/login", s.login)
-	mux.HandleFunc("POST /api/logout", func(w http.ResponseWriter, r *http.Request) {
-		_, key, _ := s.currentUser(r)
-		s.auth.mu.Lock()
-		delete(s.auth.sessions, key)
-		s.auth.mu.Unlock()
-		http.SetCookie(w, &http.Cookie{Name: consoleCookie, Path: "/", MaxAge: -1, HttpOnly: true, Secure: s.secure, SameSite: http.SameSiteLaxMode})
-		jsonOut(w, 200, map[string]bool{"ok": true})
-	})
+	mux.HandleFunc("POST /api/logout", s.logout)
+	mux.HandleFunc("POST /api/me/password", s.require(false, s.changePassword))
+	mux.HandleFunc("PATCH /api/sites/{id}", s.require(true, s.updateSite))
+	mux.HandleFunc("PATCH /api/services/{id}", s.require(true, s.updateService))
+	mux.HandleFunc("PATCH /api/users/{id}", s.require(true, s.updateUser))
+	mux.HandleFunc("POST /api/users/{id}/password", s.require(true, s.resetPassword))
+	mux.HandleFunc("GET /api/status", s.require(false, s.status))
+	mux.HandleFunc("GET /api/audit", s.require(true, s.listAudit))
+	mux.HandleFunc("GET /api/metrics", s.require(true, s.metrics))
 	mux.HandleFunc("GET /api/me", s.require(false, func(w http.ResponseWriter, r *http.Request, u User) { u.PasswordHash = ""; jsonOut(w, 200, u) }))
 	mux.HandleFunc("GET /api/sites", s.require(false, s.listSites))
 	mux.HandleFunc("POST /api/sites", s.require(true, s.createSite))
@@ -170,6 +200,18 @@ func (s *Server) Handler() http.Handler {
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
+		if r.URL.Path == "/metrics" {
+			if s.metricsToken == "" {
+				http.NotFound(w, r)
+				return
+			}
+			if !constantEqual(r.Header.Get("Authorization"), "Bearer "+s.metricsToken) {
+				fail(w, 401, "metrics token required")
+				return
+			}
+			s.metrics(w, r, User{})
+			return
+		}
 		if r.URL.Path == "/healthz" {
 			jsonOut(w, 200, map[string]string{"status": "ok"})
 			return
@@ -185,6 +227,10 @@ func (s *Server) Handler() http.Handler {
 }
 func (s *Server) require(admin bool, next func(http.ResponseWriter, *http.Request, User)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet || r.Method == http.MethodHead {
+			s.accessMu.RLock()
+			defer s.accessMu.RUnlock()
+		}
 		u, _, ok := s.currentUser(r)
 		if !ok {
 			fail(w, 401, "sign in required")
@@ -228,12 +274,14 @@ func (s *Server) connect(w http.ResponseWriter, r *http.Request) {
 		s.tunnelMu.Lock()
 		delete(s.connections, id)
 		s.tunnelMu.Unlock()
+		s.dropSiteTransports(id)
 		s.audit("agent_disconnected", "", id, "")
 	}()
 	s.audit("agent_connected", "", id, "")
 	s.tunnel.ServeHTTP(&tunnelWriter{ResponseWriter: w, ctx: ctx}, r.WithContext(ctx))
 }
 func (s *Server) disconnect(id string) {
+	s.dropSiteTransports(id)
 	s.tunnelMu.Lock()
 	if cancel := s.connections[id]; cancel != nil {
 		cancel()
@@ -242,8 +290,16 @@ func (s *Server) disconnect(id string) {
 }
 func (s *Server) listSites(w http.ResponseWriter, r *http.Request, u User) {
 	out := []map[string]any{}
-	for _, site := range s.store.snapshot().Sites {
-		if canAccess(u, site.ID) {
+	state := s.store.snapshot()
+	for _, site := range state.Sites {
+		visible := canAccess(u, site.ID)
+		for _, svc := range state.Services {
+			if svc.SiteID == site.ID && canAccessService(u, svc) {
+				visible = true
+				break
+			}
+		}
+		if visible {
 			out = append(out, map[string]any{"id": site.ID, "name": site.Name, "createdAt": site.CreatedAt, "online": s.tunnel.HasSession(site.ID)})
 		}
 	}
@@ -272,6 +328,9 @@ func (s *Server) createSite(w http.ResponseWriter, r *http.Request, u User) {
 	jsonOut(w, 201, map[string]any{"site": site, "token": token})
 }
 func (s *Server) deleteSite(w http.ResponseWriter, r *http.Request, u User) {
+	s.accessMu.Lock()
+	defer s.accessMu.Unlock()
+	oldServices := s.store.snapshot().Services
 	id := r.PathValue("id")
 	err := s.store.update(func(st *State) error {
 		for i, v := range st.Sites {
@@ -284,6 +343,25 @@ func (s *Server) deleteSite(w http.ResponseWriter, r *http.Request, u User) {
 					}
 				}
 				st.Services = services
+				for i := range st.Users {
+					sites := []string{}
+					for _, v := range st.Users[i].SiteIDs {
+						if v != id {
+							sites = append(sites, v)
+						}
+					}
+					st.Users[i].SiteIDs = sites
+					apps := []string{}
+					for _, granted := range st.Users[i].ServiceIDs {
+						for _, svc := range services {
+							if svc.ID == granted {
+								apps = append(apps, granted)
+								break
+							}
+						}
+					}
+					st.Users[i].ServiceIDs = apps
+				}
 				return nil
 			}
 		}
@@ -293,11 +371,18 @@ func (s *Server) deleteSite(w http.ResponseWriter, r *http.Request, u User) {
 		fail(w, 400, err.Error())
 		return
 	}
+	for _, svc := range oldServices {
+		if svc.SiteID == id {
+			s.revokeService(svc.ID)
+		}
+	}
 	s.disconnect(id)
 	s.audit("site_deleted", u.Username, id, "")
 	jsonOut(w, 200, map[string]bool{"ok": true})
 }
 func (s *Server) rotateSite(w http.ResponseWriter, r *http.Request, u User) {
+	s.accessMu.Lock()
+	defer s.accessMu.Unlock()
 	id := r.PathValue("id")
 	token := randomID()
 	err := s.store.update(func(st *State) error {
@@ -320,7 +405,7 @@ func (s *Server) rotateSite(w http.ResponseWriter, r *http.Request, u User) {
 func (s *Server) listServices(w http.ResponseWriter, r *http.Request, u User) {
 	out := []Service{}
 	for _, v := range s.store.snapshot().Services {
-		if canAccess(u, v.SiteID) {
+		if canAccessService(u, v) {
 			out = append(out, v)
 		}
 	}
@@ -362,11 +447,22 @@ func (s *Server) createService(w http.ResponseWriter, r *http.Request, u User) {
 	jsonOut(w, 201, svc)
 }
 func (s *Server) deleteService(w http.ResponseWriter, r *http.Request, u User) {
+	s.accessMu.Lock()
+	defer s.accessMu.Unlock()
 	id := r.PathValue("id")
 	err := s.store.update(func(st *State) error {
 		for i, v := range st.Services {
 			if v.ID == id {
 				st.Services = append(st.Services[:i], st.Services[i+1:]...)
+				for j := range st.Users {
+					apps := []string{}
+					for _, granted := range st.Users[j].ServiceIDs {
+						if granted != id {
+							apps = append(apps, granted)
+						}
+					}
+					st.Users[j].ServiceIDs = apps
+				}
 				return nil
 			}
 		}
@@ -376,6 +472,7 @@ func (s *Server) deleteService(w http.ResponseWriter, r *http.Request, u User) {
 		fail(w, 400, err.Error())
 		return
 	}
+	s.revokeService(id)
 	s.audit("service_deleted", u.Username, "", id)
 	jsonOut(w, 200, map[string]bool{"ok": true})
 }
@@ -388,9 +485,10 @@ func (s *Server) listUsers(w http.ResponseWriter, r *http.Request, u User) {
 }
 func (s *Server) createUser(w http.ResponseWriter, r *http.Request, u User) {
 	var b struct {
-		Username string   `json:"username"`
-		Password string   `json:"password"`
-		SiteIDs  []string `json:"siteIDs"`
+		Username   string   `json:"username"`
+		Password   string   `json:"password"`
+		SiteIDs    []string `json:"siteIDs"`
+		ServiceIDs []string `json:"serviceIDs"`
 	}
 	if !decode(w, r, &b) {
 		return
@@ -405,23 +503,21 @@ func (s *Server) createUser(w http.ResponseWriter, r *http.Request, u User) {
 		fail(w, 400, "invalid password")
 		return
 	}
-	user := User{ID: randomID()[:16], Username: b.Username, PasswordHash: string(h), Role: "viewer", SiteIDs: b.SiteIDs}
+	if b.SiteIDs == nil {
+		b.SiteIDs = []string{}
+	}
+	if b.ServiceIDs == nil {
+		b.ServiceIDs = []string{}
+	}
+	user := User{ID: randomID()[:16], Username: b.Username, PasswordHash: string(h), Role: "viewer", SiteIDs: b.SiteIDs, ServiceIDs: b.ServiceIDs}
 	err = s.store.update(func(st *State) error {
 		for _, v := range st.Users {
 			if v.Username == user.Username {
 				return fmt.Errorf("username exists")
 			}
 		}
-		for _, id := range b.SiteIDs {
-			found := false
-			for _, site := range st.Sites {
-				if site.ID == id {
-					found = true
-				}
-			}
-			if !found {
-				return fmt.Errorf("unknown site grant")
-			}
+		if err := validateGrants(st, b.SiteIDs, b.ServiceIDs); err != nil {
+			return err
 		}
 		st.Users = append(st.Users, user)
 		return nil
@@ -435,6 +531,8 @@ func (s *Server) createUser(w http.ResponseWriter, r *http.Request, u User) {
 	jsonOut(w, 201, user)
 }
 func (s *Server) deleteUser(w http.ResponseWriter, r *http.Request, u User) {
+	s.accessMu.Lock()
+	defer s.accessMu.Unlock()
 	id := r.PathValue("id")
 	if id == u.ID {
 		fail(w, 400, "cannot delete yourself")
@@ -453,6 +551,7 @@ func (s *Server) deleteUser(w http.ResponseWriter, r *http.Request, u User) {
 		fail(w, 400, err.Error())
 		return
 	}
+	s.revokeUser(id)
 	s.audit("user_deleted", u.Username, "", id)
 	jsonOut(w, 200, map[string]bool{"ok": true})
 }

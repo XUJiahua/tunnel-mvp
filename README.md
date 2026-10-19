@@ -6,10 +6,17 @@
 
 ![控制台示例](docs/console.png)
 
+## 文档
+
+- [操作手册](docs/operations.md)：升级、资源管理、权限、密码、ACL 重载、监控与备份。
+- [设计说明](docs/design/operations-and-access.md)：授权语义、会话撤销、连接池隔离和兼容性。
+- [实施路线图](docs/roadmap.md)：已交付能力与后续数据库、SSO、HA 等工作。
+
 ## 已实现
 
-- 控制台登录、管理员 / 成员两种角色、按站点分配访问权限。
+- 控制台登录、管理员 / 成员两种角色、按整站或单独应用分配访问权限；支持直接编辑成员授权、自助改密和管理员重置成员密码。
 - 站点创建、在线状态、一次性展示 Agent 令牌、令牌轮换、删除与断连。
+- 直接编辑站点名称、应用名称与目标地址，保留资源 ID。
 - 每站点多个 HTTP / HTTPS 应用；添加目标不需要重启 Agent，只要目标已在 Agent 白名单内。
 - 每应用独立子域名、30 秒一次性登录票据、1 小时访问会话。
 - 真实反向隧道、HTTP 请求与上传、WebSocket、SSE / 流式响应。
@@ -18,7 +25,10 @@
 - Cobra CLI + Viper 配置文件 / 环境变量 / 参数覆盖，独立 Agent 诊断命令与 text / JSON 日志。
 - Agent 侧 CIDR + 端口 + 可选精确主机名白名单；内网 DNS 解析后校验 IP，并直接连接该 IP。
 - HTTPS Origin 证书与 SNI 校验，系统 CA 信任；不提供跳过证书校验的开关。
-- JSON 状态文件持久化与 JSONL 审计日志；密码 bcrypt、Agent 令牌 SHA-256 存储。
+- 退出、改密、删除、收回授权及会话到期主动关闭受影响的 WebSocket / SSE / HTTP 请求。
+- Agent `--watch-config` 校验后自动重载本地 ACL，通过重连撤销旧连接。
+- 按应用隔离的 HTTP 连接池、周期 HEAD 探测、状态快照、Prometheus 指标与告警配置示例。
+- JSON 状态文件持久化与 JSONL 审计日志、大小轮转及控制台查询；密码 bcrypt、Agent 令牌 SHA-256 存储。
 - Docker 多阶段构建、Compose、GitHub Actions 构建与测试。
 
 ## 架构
@@ -124,6 +134,9 @@ export TUNNEL_AGENT_TOKEN
 | 控制台地址 | `TUNNEL_PUBLIC_URL` | `--public-url` |
 | 应用域地址 | `TUNNEL_ACCESS_URL` | `--access-url` |
 | 数据目录 | `TUNNEL_DATA_DIR` | `--data-dir` |
+| 自动探测间隔（秒） | `TUNNEL_PROBE_INTERVAL_SECONDS` | `--probe-interval` |
+| 审计文件大小（MiB） | `TUNNEL_AUDIT_MAX_MB` | `--audit-max-mb` |
+| 审计备份份数 | `TUNNEL_AUDIT_BACKUPS` | `--audit-backups` |
 | 初始管理员名称 | `TUNNEL_ADMIN_USERNAME` | `--admin-username` |
 | Agent 连接地址 | `TUNNEL_SERVER_URL` | `--server-url` |
 | Agent 站点 | `TUNNEL_SITE_ID` | `--site-id` |
@@ -131,7 +144,7 @@ export TUNNEL_AGENT_TOKEN
 | 日志级别 | `TUNNEL_LOG_LEVEL` | `--log-level` |
 | 日志格式 | `TUNNEL_LOG_FORMAT` | `--log-format` |
 
-配置文件也可以设置 `logLevel: debug`、`logFormat: json`。密码与 Agent 令牌仍仅从 `TUNNEL_ADMIN_PASSWORD` / `TUNNEL_AGENT_TOKEN` 读取。
+配置文件也可以设置 `logLevel: debug`、`logFormat: json`。监控令牌使用 `TUNNEL_METRICS_TOKEN`（至少 32 字节），设置后启用 Bearer 认证的 `/metrics`，未设置时关闭。详见操作手册和 `examples/monitoring/`。密码与 Agent 令牌仍仅从 `TUNNEL_ADMIN_PASSWORD` / `TUNNEL_AGENT_TOKEN` 读取。
 
 ## 连接失败怎么定位
 
@@ -182,7 +195,7 @@ export TUNNEL_AGENT_TOKEN
 
 一条规则中的 CIDR、端口和可选主机名必须同时匹配，多条规则之间为“或”。`host` 是精确主机名，不支持通配符。主机名由 Agent 在内网解析，实际连接的是通过 CIDR 检查的 IP；不允许使用域名绕过网段限制。始终拒绝未指定地址、多播、链路本地地址（包括云元数据常用地址）；不支持 UDP。
 
-每个站点一个 Agent 即可访问其网络范围内的多个目标。MVP 同一站点只接受一个活跃 Agent，重复连接返回 409。断开后使用带抖动的 1–30 秒退避自动重连。修改 Agent 白名单需要重启 Agent。
+每个站点一个 Agent 即可访问其网络范围内的多个目标。MVP 同一站点只接受一个活跃 Agent，重复连接返回 409。断开后使用带抖动的 1–30 秒退避自动重连。使用 `--watch-config` 时，每 2 秒检查本地配置；合法 ACL 变更会断开旧隧道并重连，无效配置保持旧策略。未启用时需重启 Agent。身份、令牌或日志设置变更仍需重启。
 
 令牌由环境变量传入，不要写进命令行参数、版本库或镜像。令牌轮换会断开旧连接，旧令牌将无法重连。
 
@@ -220,7 +233,7 @@ Compose 默认只将 Go 的 8080 绑定到公网机器的回环地址，由宿�
 3. 新标签页在应用子域名兑换 host-only 访问 Cookie，然后 303 跳转到 `/`，从地址栏移除票据。
 4. 每个后续请求检查用户会话、应用 ID、站点授权，再通过远程 Dial 代理。
 
-票据与应用 Cookie 绑定具体应用。退出控制台或删除成员会使其已有应用 Cookie 的**后续请求**失效。删除站点会删除关联应用并关闭该站点隧道；轮换令牌会关闭隧道和其中的流。
+票据与应用 Cookie 绑定具体应用。退出控制台、改密或删除成员会使相应应用 Cookie 的后续请求失效，并主动关闭受影响的长连接。收回应用授权也会关闭该应用的现有请求。删除站点会删除关联应用并关闭该站点隧道；轮换令牌会关闭隧道和其中的流。
 
 **内网应用仍使用自身的登录机制。** 控制面登录不等于自动登录 Grafana 等应用。需要免重复登录时，应另行集成共同的 OIDC 身份提供方。
 
@@ -233,7 +246,7 @@ Compose 默认只将 Go 的 8080 绑定到公网机器的回环地址，由宿�
 - 清除上游 Cookie 的 Domain，保留 Path / HttpOnly / SameSite；HTTPS 公网访问强制添加 Secure。
 - 保留上游 CSP 和其他应用安全响应头，不通过 iframe 嵌入应用。
 - `tunnel_console`、`tunnel_access` 为保留 Cookie 名；`/_tunnel/entry` 为保留路径。
-- HTTP HEAD 探测成功代表收到了 HTTP 响应（包括 401 / 403 / 405 / 5xx），不代表业务健康。
+- 默认每 60 秒自动 HEAD 探测（`--probe-interval 0` 可禁用），最多 4 个并发任务。HTTP HEAD 探测成功代表收到了 HTTP 响应（包括 401 / 403 / 405 / 5xx），不代表业务健康；探测结果另有 `healthy` 字段表示 HEAD 是否返回 200–399。
 
 ## 数据、审计与边界
 
@@ -244,17 +257,17 @@ Compose 默认只将 Go 的 8080 绑定到公网机器的回环地址，由宿�
 | `state.json` | 用户、bcrypt 密码散列、站点、Agent 令牌散列、应用与权限 |
 | `audit.jsonl` | 登录、站点 / 应用 / 用户操作、Agent 连接、应用访问与探测事件 |
 
-状态使用互斥锁和临时文件落盘后原子替换，文件权限 0600、默认新建目录 0700。审计记录用户和资源 ID，不保存令牌、Cookie、请求体或查询参数。备份整个数据目录；审计日志由部署环境负责轮转。
+状态使用互斥锁和临时文件落盘后原子替换，文件权限 0600、默认新建目录 0700。审计记录用户和资源 ID，不保存令牌、Cookie、请求体或查询参数。备份整个数据目录；审计默认每 20 MiB 轮转、保留 5 份，可配置；控制台提供当前文件尾部查询。完整历史可交给外部日志系统。
 
 **MVP 明确范围：**
 
 - 单控制面进程、单数据目录；没有多实例共享存储、HA 或跨网关隧道路由。不要多进程同时打开同一数据目录。
 - 用户 / 访问会话与短期票据在内存中，重启 Server 后需重新登录；用户、站点、服务配置保留。
-- 授权在每个 HTTP 请求及 WebSocket Upgrade 时检查；用户退出后，已建立的长连接不会因会话失效自动逐个关闭。删除站点 / 轮换令牌会关闭整个站点隧道。
-- 目前提供创建 / 删除成员和站点授权；修改成员授权可删除后重新创建。没有密码重置、自助改密、OIDC、MFA。
+- 授权在每个 HTTP 请求及 WebSocket Upgrade 时检查；退出、密码变更、授权收回或到期主动关闭受影响的请求。删除站点 / 轮换令牌会关闭整个站点隧道。
+- 已支持成员授权编辑、自助改密和管理员重置成员密码；尚无离线管理员密码恢复、用户组、多租户、自定义角色、OIDC、MFA。
 - 目标登记由管理员执行；成员不能提交任意目标地址。通过新增应用可动态访问 Agent 白名单内的新目标。
 - 不支持 SSH / RDP / 数据库的浏览器协议网关，也不支持 UDP、P2P 或 QUIC。
-- 每个代理请求创建独立 Transport，先保证站点与目标隔离；尚未做跨请求连接池、高并发压测或生产安全审计。
+- 连接池按应用隔离并在 Agent 断线/目标修改时清理；已验证真实隧道连接复用。尚未进行生产容量压测或生产安全审计；连接绑定身份的认证协议需要额外适配。
 - 60 次 / 分钟全局登录限速用于 MVP；面向公网可在反向代理中另加按 IP 限速。
 
 ## 开发与验证

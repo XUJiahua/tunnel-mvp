@@ -100,3 +100,25 @@ func TestStandaloneAgentDiagnosisWithoutToken(t *testing.T) {
 		t.Fatalf("diagnostic exit/output: %s %v", out, err)
 	}
 }
+
+func TestOperationsConfiguration(t *testing.T) {
+	t.Setenv("TUNNEL_PROBE_INTERVAL_SECONDS", "120")
+	out, err := execute("server", "--probe-interval", "0", "--audit-max-mb", "8", "--audit-backups", "3", "--check-config")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg map[string]any
+	if json.Unmarshal([]byte(out), &cfg) != nil || cfg["probeIntervalSeconds"] != float64(0) || cfg["auditMaxMB"] != float64(8) || cfg["auditBackups"] != float64(3) {
+		t.Fatalf("operations flags not applied: %s", out)
+	}
+	for _, args := range [][]string{{"server", "--probe-interval", "1", "--check-config"}, {"server", "--audit-backups", "21", "--check-config"}, {"server", "--audit-max-mb", "-1", "--check-config"}} {
+		if _, err := execute(args...); err == nil {
+			t.Fatalf("invalid configuration accepted: %v", args)
+		}
+	}
+	t.Setenv("TUNNEL_CONFIG", "")
+	_, err = execute("agent", "--site-id", "test", "--allow", `[{"cidr":"127.0.0.0/8","ports":[80]}]`, "--watch-config")
+	if err == nil || !strings.Contains(err.Error(), "requires --config") {
+		t.Fatalf("watcher should require config: %v", err)
+	}
+}

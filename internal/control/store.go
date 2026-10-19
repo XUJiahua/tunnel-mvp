@@ -21,6 +21,7 @@ type User struct {
 	PasswordHash string   `json:"passwordHash,omitempty"`
 	Role         string   `json:"role"`
 	SiteIDs      []string `json:"siteIDs"`
+	ServiceIDs   []string `json:"serviceIDs"`
 }
 type Site struct {
 	ID        string    `json:"id"`
@@ -154,6 +155,20 @@ func canAccess(u User, siteID string) bool {
 	}
 	for _, id := range u.SiteIDs {
 		if id == siteID {
+			return true
+		}
+	}
+	return false
+}
+
+// Site grants cover all current and future applications in that site. Explicit
+// service grants are additive and never grant access to sibling applications.
+func canAccessService(u User, svc Service) bool {
+	if canAccess(u, svc.SiteID) {
+		return true
+	}
+	for _, id := range u.ServiceIDs {
+		if id == svc.ID {
 			return true
 		}
 	}

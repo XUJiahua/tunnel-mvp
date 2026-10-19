@@ -5,6 +5,7 @@ services:
     ports: ["127.0.0.1:8080:8080"]
     environment:
       TUNNEL_ADMIN_PASSWORD: ${TUNNEL_ADMIN_PASSWORD:?Set a 12-72 byte bootstrap password}
+      TUNNEL_METRICS_TOKEN: ${TUNNEL_METRICS_TOKEN:-}
     volumes:
       - ./examples/server.production.json:/app/server.json:ro
       - tunnel-data:/var/lib/tunnel

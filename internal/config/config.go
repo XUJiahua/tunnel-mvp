@@ -30,12 +30,15 @@ func (l *Logging) Validate() error {
 }
 
 type Server struct {
-	Logging       `mapstructure:",squash"`
-	Listen        string `json:"listen" mapstructure:"listen"`
-	PublicURL     string `json:"publicURL" mapstructure:"publicURL"`
-	AccessURL     string `json:"accessURL" mapstructure:"accessURL"`
-	DataDir       string `json:"dataDir" mapstructure:"dataDir"`
-	AdminUsername string `json:"adminUsername" mapstructure:"adminUsername"`
+	Logging              `mapstructure:",squash"`
+	Listen               string `json:"listen" mapstructure:"listen"`
+	PublicURL            string `json:"publicURL" mapstructure:"publicURL"`
+	AccessURL            string `json:"accessURL" mapstructure:"accessURL"`
+	DataDir              string `json:"dataDir" mapstructure:"dataDir"`
+	ProbeIntervalSeconds int    `json:"probeIntervalSeconds" mapstructure:"probeIntervalSeconds"`
+	AuditMaxMB           int    `json:"auditMaxMB" mapstructure:"auditMaxMB"`
+	AuditBackups         int    `json:"auditBackups" mapstructure:"auditBackups"`
+	AdminUsername        string `json:"adminUsername" mapstructure:"adminUsername"`
 }
 type Rule struct {
 	CIDR  string `json:"cidr" mapstructure:"cidr"`
@@ -65,6 +68,18 @@ func Origin(raw string) (*url.URL, error) {
 	return u, nil
 }
 func (s *Server) Validate() error {
+	if s.ProbeIntervalSeconds < 0 || (s.ProbeIntervalSeconds > 0 && s.ProbeIntervalSeconds < 10) || s.ProbeIntervalSeconds > 86400 {
+		return fmt.Errorf("probeIntervalSeconds must be 0 (disabled) or 10–86400")
+	}
+	if s.AuditMaxMB == 0 {
+		s.AuditMaxMB = 20
+	}
+	if s.AuditBackups == 0 {
+		s.AuditBackups = 5
+	}
+	if s.AuditMaxMB < 1 || s.AuditMaxMB > 1024 || s.AuditBackups < 1 || s.AuditBackups > 20 {
+		return fmt.Errorf("auditMaxMB must be 1–1024; auditBackups must be 1–20")
+	}
 	if err := s.Logging.Validate(); err != nil {
 		return err
 	}

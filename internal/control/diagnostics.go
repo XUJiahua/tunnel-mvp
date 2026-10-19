@@ -12,6 +12,7 @@ import (
 
 type probeReport struct {
 	*diagnostics.Failure
+	Healthy   bool      `json:"healthy"`
 	Reachable bool      `json:"reachable"`
 	RequestID string    `json:"requestID"`
 	SiteID    string    `json:"siteID"`

@@ -90,6 +90,9 @@ func newRootCommand() *cobra.Command {
 		defer s.Close()
 		return s.Run(cmd.Context())
 	}}
+	server.Flags().Int("probe-interval", 60, "Automatic HEAD probe interval in seconds; 0 disables")
+	server.Flags().Int("audit-max-mb", 20, "Audit file rotation size in MiB")
+	server.Flags().Int("audit-backups", 5, "Number of rotated audit files to retain")
 	server.Flags().String("listen", ":8080", "HTTP listen address")
 	server.Flags().String("public-url", "http://localhost:8080", "Public console origin")
 	server.Flags().String("access-url", "http://apps.localhost:8080", "Application domain origin")
@@ -109,11 +112,19 @@ func newRootCommand() *cobra.Command {
 		if check {
 			return output(cmd, c)
 		}
+		watch, _ := cmd.Flags().GetBool("watch-config")
+		if watch {
+			if path == "" && os.Getenv("TUNNEL_CONFIG") == "" {
+				return fmt.Errorf("--watch-config requires --config or TUNNEL_CONFIG")
+			}
+			return agent.RunWatched(cmd.Context(), c, os.Getenv("TUNNEL_AGENT_TOKEN"), func() (config.Agent, error) { return config.AgentFrom(path, cmd.Flags()) })
+		}
 		return agent.Run(cmd.Context(), c, os.Getenv("TUNNEL_AGENT_TOKEN"))
 	}}
 	agentCommand.PersistentFlags().String("server-url", "http://localhost:8080", "Public control plane origin")
 	agentCommand.PersistentFlags().String("site-id", "", "Registered site ID")
 	agentCommand.PersistentFlags().String("allow", "", "Agent ACL rules as a JSON array (or TUNNEL_ALLOW)")
+	agentCommand.Flags().Bool("watch-config", false, "Reload valid ACL file changes every 2s; reconnects the tunnel")
 	agentCommand.Flags().Bool("check-config", false, "Validate and print effective configuration without starting")
 	var target string
 	diagnose := &cobra.Command{Use: "diagnose", Short: "Test a target using local Agent DNS/ACL/TCP/HTTP (no token needed)", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {

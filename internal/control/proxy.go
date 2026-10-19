@@ -19,8 +19,16 @@ func (s *Server) serviceURL(id string) *url.URL {
 	return &u
 }
 func (s *Server) launch(w http.ResponseWriter, r *http.Request, u User) {
+	s.accessMu.RLock()
+	defer s.accessMu.RUnlock()
+	fresh, _, authenticated := s.currentUser(r)
+	if !authenticated {
+		fail(w, 401, "sign in required")
+		return
+	}
+	u = fresh
 	svc, ok := s.store.service(r.PathValue("id"))
-	if !ok || !canAccess(u, svc.SiteID) {
+	if !ok || !canAccessService(u, svc) {
 		fail(w, 404, "service not found")
 		return
 	}
@@ -54,6 +62,13 @@ func (s *Server) validGrant(g grant, serviceID string) (User, bool) {
 	return u, ok
 }
 func (s *Server) gateway(w http.ResponseWriter, r *http.Request) {
+	s.accessMu.RLock()
+	locked := true
+	defer func() {
+		if locked {
+			s.accessMu.RUnlock()
+		}
+	}()
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	suffix := "." + s.access.Host
@@ -83,7 +98,7 @@ func (s *Server) gateway(w http.ResponseWriter, r *http.Request) {
 		delete(s.auth.tickets, key)
 		s.auth.mu.Unlock()
 		u, valid := s.validGrant(g, id)
-		if !found || !valid || !canAccess(u, svc.SiteID) {
+		if !found || !valid || !canAccessService(u, svc) {
 			fail(w, 401, "access ticket expired or invalid; reopen from console")
 			return
 		}
@@ -106,7 +121,7 @@ func (s *Server) gateway(w http.ResponseWriter, r *http.Request) {
 	g, ok := s.auth.access[digest(c.Value)]
 	s.auth.mu.Unlock()
 	u, valid := s.validGrant(g, id)
-	if !ok || !valid || !canAccess(u, svc.SiteID) {
+	if !ok || !valid || !canAccessService(u, svc) {
 		fail(w, 401, "access expired; reopen from console")
 		return
 	}
@@ -114,9 +129,14 @@ func (s *Server) gateway(w http.ResponseWriter, r *http.Request) {
 		fail(w, 503, "site is offline")
 		return
 	}
+	ctx, release := s.trackRequest(r.Context(), u, g)
+	defer release()
+	r = r.WithContext(ctx)
 	target, _ := url.Parse(svc.URL)
-	transport := s.transport(svc.SiteID)
-	defer transport.CloseIdleConnections()
+	transport := s.serviceTransport(svc)
+	s.accessMu.RUnlock()
+	locked = false
+	s.stats.requests.Add(1)
 	public := s.serviceURL(id)
 	proxy := &httputil.ReverseProxy{
 		Transport: transport, FlushInterval: -1,
@@ -169,6 +189,7 @@ func (s *Server) gateway(w http.ResponseWriter, r *http.Request) {
 			return nil
 		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			s.stats.errors.Add(1)
 			s.proxyFailure(w, u, svc, err)
 		},
 	}
@@ -184,47 +205,59 @@ func (s *Server) transport(siteID string) *http.Transport {
 	}, TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12}, TLSHandshakeTimeout: 10 * time.Second, ResponseHeaderTimeout: 30 * time.Second, IdleConnTimeout: 30 * time.Second, MaxIdleConnsPerHost: 4, ForceAttemptHTTP2: false}
 }
 func (s *Server) probe(w http.ResponseWriter, r *http.Request, u User) {
+	s.accessMu.RLock()
+	fresh, key, valid := s.currentUser(r)
+	if !valid {
+		s.accessMu.RUnlock()
+		fail(w, 401, "sign in required")
+		return
+	}
+	u = fresh
 	svc, ok := s.store.service(r.PathValue("id"))
-	if !ok || !canAccess(u, svc.SiteID) {
+	if !ok || !canAccessService(u, svc) {
+		s.accessMu.RUnlock()
 		fail(w, 404, "service not found")
 		return
 	}
+	ctx, release := s.trackRequest(r.Context(), u, grant{SessionKey: key, ServiceID: svc.ID, Expires: time.Now().Add(14 * time.Second)})
+	s.accessMu.RUnlock()
+	defer release()
+	report := s.checkService(ctx, svc)
+	s.saveReport(svc, report)
+	event := "probe"
+	if !report.Reachable {
+		event = "probe_failed"
+	}
+	s.recordDiagnostic(event, u, report)
+	w.Header().Set("X-Tunnel-Request-ID", report.RequestID)
+	jsonOut(w, 200, report)
+}
+func (s *Server) checkService(parent context.Context, svc Service) probeReport {
 	report := newReport(svc)
 	start := time.Now()
-	w.Header().Set("X-Tunnel-Request-ID", report.RequestID)
-	finish := func() {
-		report.LatencyMs = time.Since(start).Milliseconds()
-		event := "probe"
-		if !report.Reachable {
-			event = "probe_failed"
-		}
-		s.recordDiagnostic(event, u, report)
-		jsonOut(w, 200, report)
-	}
+	defer func() { s.stats.probes.Add(1) }()
 	if !s.tunnel.HasSession(svc.SiteID) {
 		report.Failure = diagnostics.New("site_offline", "tunnel", "site Agent is not connected")
-		finish()
-		return
+		return report
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 14*time.Second)
+	ctx, cancel := context.WithTimeout(parent, 14*time.Second)
 	defer cancel()
-	t := s.transport(svc.SiteID)
-	defer t.CloseIdleConnections()
+	t := s.serviceTransport(svc)
 	client := &http.Client{Transport: t, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	req, err := http.NewRequestWithContext(ctx, "HEAD", svc.URL, nil)
 	if err != nil {
 		report.Failure = diagnostics.New("invalid_target", "configuration", err.Error())
-		finish()
-		return
+		return report
 	}
 	resp, err := client.Do(req)
+	report.LatencyMs = time.Since(start).Milliseconds()
 	if err != nil {
 		report.Failure = s.describeFailure(svc.SiteID, err)
-		finish()
-		return
+		return report
 	}
 	defer resp.Body.Close()
 	report.Reachable = true
 	report.Status = resp.StatusCode
-	finish()
+	report.Healthy = resp.StatusCode >= 200 && resp.StatusCode < 400
+	return report
 }

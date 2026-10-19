@@ -1363,3 +1363,20 @@ td code {
   color: #8a594b;
   line-height: 1.7;
 }
+
+.audit-filters {
+  display: flex;
+  gap: 16px;
+  align-items: end;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+.audit-filters .field {
+  margin: 0;
+  flex: 1;
+  min-width: 180px;
+}
+.grants {
+  max-height: 240px;
+  overflow: auto;
+}

@@ -9,16 +9,22 @@ import {
   useState,
 } from "react";
 
+import { api, APIError } from "./api";
+import { AuditPanel, Editor, Grants, ResourceEditor } from "./operations";
+
 type User = {
   id: string;
   username: string;
   role: "admin" | "viewer";
   siteIDs: string[];
+  serviceIDs?: string[];
 };
 type Site = { id: string; name: string; online: boolean; createdAt: string };
 type Service = { id: string; name: string; siteID: string; url: string };
 type Probe = {
   reachable: boolean;
+  healthy?: boolean;
+  serviceID?: string;
   status?: number;
   latencyMs?: number;
   message?: string;
@@ -35,33 +41,6 @@ type Probe = {
 };
 type Dialog = "site" | "service" | "user" | null;
 type Enrollment = { id: string; name: string; token: string };
-
-class APIError extends Error {
-  constructor(
-    message: string,
-    public status: number,
-  ) {
-    super(message);
-  }
-}
-
-async function api<T>(
-  path: string,
-  method = "GET",
-  body?: unknown,
-): Promise<T> {
-  const res = await fetch(`/api${path}`, {
-    method,
-    credentials: "same-origin",
-    cache: "no-store",
-    headers: body === undefined ? {} : { "Content-Type": "application/json" },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  const data = await res.json();
-  if (!res.ok)
-    throw new APIError(data.error || `请求失败 (${res.status})`, res.status);
-  return data as T;
-}
 
 function Icon({ name, size = 20 }: { name: string; size?: number }) {
   const paths: Record<string, ReactNode> = {
@@ -202,6 +181,7 @@ export default function Home() {
   const [sites, setSites] = useState<Site[]>([]);
   const [services, setServices] = useState<Service[]>([]);
   const [users, setUsers] = useState<User[]>([]);
+  const [editor, setEditor] = useState<Editor | null>(null);
   const [dialog, setDialog] = useState<Dialog>(null);
   const [enrollment, setEnrollment] = useState<Enrollment | null>(null);
   const [error, setError] = useState("");
@@ -219,11 +199,26 @@ export default function Home() {
   const admin = user?.role === "admin";
 
   const refresh = useCallback(async (u: User) => {
-    const [a, b, c] = await Promise.all([
+    const [a, b, c, health] = await Promise.all([
       api<Site[]>("/sites"),
       api<Service[]>("/services"),
       u.role === "admin" ? api<User[]>("/users") : Promise.resolve([]),
+      api<{ reports: Probe[] }>("/status"),
     ]);
+    setProbes((previous) => {
+      const next: Record<string, Probe> = {};
+      for (const service of b) {
+        const current = previous[service.id];
+        const report = health.reports.find((p) => p.serviceID === service.id);
+        if (
+          report &&
+          (!current?.checkedAt || (report.checkedAt || "") >= current.checkedAt)
+        )
+          next[service.id] = report;
+        else if (current) next[service.id] = current;
+      }
+      return next;
+    });
     setSites(a);
     setServices(b);
     setUsers(c);
@@ -279,6 +274,8 @@ export default function Home() {
       setServices([]);
       setUsers([]);
       setEnrollment(null);
+      setEditor(null);
+      setProbes({});
       setError("");
     } catch (e) {
       setError((e as Error).message);
@@ -303,6 +300,7 @@ export default function Home() {
           username: data.get("username"),
           password: data.get("password"),
           siteIDs: data.getAll("siteIDs"),
+          serviceIDs: data.getAll("serviceIDs"),
         });
       setDialog(null);
       if (user) await refresh(user);
@@ -406,7 +404,8 @@ export default function Home() {
     overview: ["让每个内网，触手可及。", "一个入口，连接分散的站点与应用。"],
     sites: ["站点", "连接你的数据面，建立安全的出站隧道。"],
     services: ["应用", "从这里进入已授权的内网服务。"],
-    users: ["访问权限", "为成员分配站点访问权限。"],
+    users: ["访问权限", "为成员分配整站或单独应用访问权限。"],
+    audit: ["审计日志", "查询访问、权限变更与健康状态变化。"],
   };
 
   if (booting)
@@ -535,6 +534,12 @@ export default function Home() {
             </button>
             {admin && (
               <div>
+                <button
+                  className="subtle"
+                  onClick={() => setEditor({ kind: "site", site })}
+                >
+                  编辑
+                </button>
                 <button className="subtle" onClick={() => rotate(site)}>
                   令牌
                 </button>
@@ -586,10 +591,14 @@ export default function Home() {
                 </td>
                 <td>
                   <button
-                    className={`probe ${p ? (p.reachable ? "good" : "bad") : ""}`}
+                    className={`probe ${p ? (p.reachable && p.healthy !== false ? "good" : "bad") : ""}`}
                     onClick={() => probe(service)}
                     disabled={probing === service.id}
-                    title={p?.message}
+                    title={
+                      p?.checkedAt
+                        ? `探测于 ${new Date(p.checkedAt).toLocaleString()} · ${p.healthy ? "HEAD 返回 2xx/3xx" : p.reachable ? "HTTP 可达，请检查业务状态" : p.message}`
+                        : p?.message
+                    }
                   >
                     {probing === service.id
                       ? "探测中…"
@@ -618,6 +627,14 @@ export default function Home() {
                       {opening === service.id ? "打开中…" : "打开"}
                       <Icon name="arrow" size={15} />
                     </button>
+                    {admin && (
+                      <button
+                        className="subtle"
+                        onClick={() => setEditor({ kind: "service", service })}
+                      >
+                        编辑
+                      </button>
+                    )}
                     {admin && (
                       <button
                         className="subtle danger"
@@ -656,7 +673,12 @@ export default function Home() {
             ["overview", "grid", "概览"],
             ["sites", "server", "站点"],
             ["services", "apps", "应用"],
-            ...(admin ? [["users", "users", "访问权限"]] : []),
+            ...(admin
+              ? [
+                  ["users", "users", "访问权限"],
+                  ["audit", "shield", "审计日志"],
+                ]
+              : []),
           ].map(([key, icon, label]) => (
             <button
               key={key}
@@ -708,13 +730,27 @@ export default function Home() {
             <span>{tab === "overview" ? "概览" : titles[tab][0]}</span>
           </div>
           <div className="topbar-status">
+            <button
+              className="subtle"
+              onClick={() => {
+                setError("");
+                setEditor({ kind: "password" });
+              }}
+            >
+              修改密码
+            </button>
             <span className={`dot ${connected ? "green" : ""}`} />
             {connected ? "控制面已连接" : "控制面连接中断"}
             <button
               className="icon-button"
               title="刷新数据"
               aria-label="刷新数据"
-              onClick={() => refresh(user).catch((e) => setError(e.message))}
+              onClick={() =>
+                refresh(user).catch((e) => {
+                  if (e instanceof APIError && e.status === 401) setUser(null);
+                  else setError(e.message);
+                })
+              }
             >
               <Icon name="refresh" size={17} />
             </button>
@@ -737,7 +773,9 @@ export default function Home() {
                 ? addButton("service", "添加应用")
                 : tab === "users"
                   ? addButton("user", "添加成员")
-                  : addButton("site", "接入新站点")}
+                  : tab === "overview"
+                    ? addButton("site", "接入新站点")
+                    : null}
           </div>
           {error && (
             <div className="error-banner" role="alert">
@@ -882,12 +920,13 @@ export default function Home() {
               )}
             </>
           )}
+          {tab === "audit" && admin && <AuditPanel />}
           {tab === "users" && (
             <>
               <div className="permission-note">
                 <Icon name="shield" />
                 <p>
-                  管理员可管理全部站点。成员仅可查看、检测和打开获授权站点的应用；Agent
+                  管理员可管理全部站点。成员可通过整站授权或单独应用授权查看、检测和打开应用；Agent
                   仍会独立检查目标白名单。
                 </p>
               </div>
@@ -897,7 +936,7 @@ export default function Home() {
                     <tr>
                       <th>成员</th>
                       <th>角色</th>
-                      <th>站点权限</th>
+                      <th>站点 / 应用权限</th>
                       <th className="right">操作</th>
                     </tr>
                   </thead>
@@ -915,15 +954,47 @@ export default function Home() {
                         <td>
                           {u.role === "admin"
                             ? "全部站点"
-                            : u.siteIDs
+                            : (u.siteIDs || [])
                                 .map(
                                   (id) =>
                                     sites.find((s) => s.id === id)?.name ||
                                     "已删除站点",
                                 )
-                                .join("、") || "暂无授权"}
+                                .join("、") || "无整站授权"}
+                          {u.role !== "admin" && !!u.serviceIDs?.length && (
+                            <div className="muted small">
+                              应用：
+                              {u.serviceIDs
+                                .map(
+                                  (id) =>
+                                    services.find((s) => s.id === id)?.name ||
+                                    "已删除应用",
+                                )
+                                .join("、")}
+                            </div>
+                          )}
                         </td>
                         <td className="right">
+                          {u.role !== "admin" && (
+                            <>
+                              <button
+                                className="subtle"
+                                onClick={() =>
+                                  setEditor({ kind: "grants", user: u })
+                                }
+                              >
+                                编辑权限
+                              </button>
+                              <button
+                                className="subtle"
+                                onClick={() =>
+                                  setEditor({ kind: "reset", user: u })
+                                }
+                              >
+                                重置密码
+                              </button>
+                            </>
+                          )}
                           {u.role !== "admin" && (
                             <button
                               className="subtle danger"
@@ -948,6 +1019,26 @@ export default function Home() {
           </footer>
         </main>
       </div>
+      {editor && (
+        <ResourceEditor
+          editor={editor}
+          sites={sites}
+          services={services}
+          onClose={() => setEditor(null)}
+          onSaved={async (reauth) => {
+            setEditor(null);
+            if (reauth) {
+              setUser(null);
+              setTab("overview");
+              setProbes({});
+              setNotice("密码已修改，请重新登录");
+            } else {
+              await refresh(user);
+              setNotice("已保存");
+            }
+          }}
+        />
+      )}
       {diagnostic && (
         <Modal
           title={`连接诊断 · ${diagnostic.service.name}`}
@@ -1135,19 +1226,7 @@ export default function Home() {
                     autoComplete="new-password"
                   />
                 </Field>
-                <fieldset className="grants">
-                  <legend>可访问站点</legend>
-                  {sites.length ? (
-                    sites.map((site) => (
-                      <label key={site.id}>
-                        <input type="checkbox" name="siteIDs" value={site.id} />
-                        {site.name}
-                      </label>
-                    ))
-                  ) : (
-                    <p className="muted">尚无可授权的站点。</p>
-                  )}
-                </fieldset>
+                <Grants sites={sites} services={services} />
               </>
             )}
             {error && (

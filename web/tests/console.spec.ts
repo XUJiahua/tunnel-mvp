@@ -238,6 +238,94 @@ test("enroll site, open and log in to internal app, enforce viewer permissions",
   await expect(
     viewer.getByRole("button", { name: "访问权限", exact: true }),
   ).toHaveCount(0);
+  // Resource edits retain identity and application-only grants hide siblings.
+  const memberRow = page
+    .getByRole("row")
+    .filter({ has: page.getByRole("cell", { name: "reader", exact: true }) });
+  await memberRow
+    .getByRole("button", { name: "编辑权限", exact: true })
+    .click();
+  await page.getByLabel("上海数据中心", { exact: true }).uncheck();
+  await page.getByLabel("数据面控制台 · 上海数据中心", { exact: true }).check();
+  await page.getByRole("button", { name: "保存", exact: true }).click();
+  await viewer.getByRole("button", { name: "刷新数据", exact: true }).click();
+  await viewer.getByRole("button", { name: /^应用/ }).click();
+  await expect(
+    viewer.getByRole("cell", { name: "数据面控制台", exact: true }),
+  ).toBeVisible();
+  await expect(
+    viewer.getByRole("cell", { name: "白名单诊断", exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    viewer.getByRole("button", { name: "审计日志", exact: true }),
+  ).toHaveCount(0);
+
+  await page.getByRole("button", { name: /^站点/ }).first().click();
+  const siteCard = page
+    .locator(".site-card")
+    .filter({
+      has: page.getByRole("heading", { name: "上海数据中心", exact: true }),
+    });
+  await siteCard.getByRole("button", { name: "编辑", exact: true }).click();
+  await page.getByLabel("站点名称", { exact: true }).fill("上海生产环境");
+  await page.getByRole("button", { name: "保存", exact: true }).click();
+  await expect(
+    page.getByRole("heading", { name: "上海生产环境", exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: /^应用/ }).first().click();
+  const editable = page
+    .getByRole("row")
+    .filter({
+      has: page.getByRole("cell", { name: "数据面控制台", exact: true }),
+    });
+  await editable.getByRole("button", { name: "编辑", exact: true }).click();
+  await page.getByLabel("应用名称", { exact: true }).fill("生产控制台");
+  await page.getByRole("button", { name: "保存", exact: true }).click();
+  await expect(
+    page.getByRole("cell", { name: "生产控制台", exact: true }),
+  ).toBeVisible();
+
+  await page.getByRole("button", { name: "审计日志", exact: true }).click();
+  await page.getByLabel("事件类型", { exact: true }).fill("service_updated");
+  await page.getByRole("button", { name: "查询审计", exact: true }).click();
+  await expect(
+    page.getByRole("cell", { name: "service_updated", exact: true }),
+  ).toBeVisible();
+  await page.screenshot({
+    path: test.info().outputPath("audit.png"),
+    fullPage: true,
+  });
+
+  await viewer.getByRole("button", { name: "修改密码", exact: true }).click();
+  await viewer.getByLabel("当前密码", { exact: true }).fill(password);
+  await viewer
+    .getByLabel("新密码", { exact: true })
+    .fill("viewer-changed-password-123");
+  await viewer
+    .getByLabel("确认新密码", { exact: true })
+    .fill("viewer-changed-password-123");
+  await viewer.getByRole("button", { name: "保存", exact: true }).click();
+  await expect(
+    viewer.getByRole("button", { name: "登录控制台", exact: true }),
+  ).toBeVisible();
+  await viewer.getByLabel("用户名", { exact: true }).fill("reader");
+  await viewer
+    .getByLabel("密码", { exact: true })
+    .fill("viewer-changed-password-123");
+  await viewer.getByRole("button", { name: "登录控制台", exact: true }).click();
+  await expect(
+    viewer.getByRole("heading", { name: "上海生产环境", exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "访问权限", exact: true }).click();
+  await memberRow
+    .getByRole("button", { name: "重置密码", exact: true })
+    .click();
+  await page.getByLabel("新密码", { exact: true }).fill(password);
+  await page.getByRole("button", { name: "保存", exact: true }).click();
+  await viewer.getByRole("button", { name: "刷新数据", exact: true }).click();
+  await expect(
+    viewer.getByRole("button", { name: "登录控制台", exact: true }),
+  ).toBeVisible();
   await viewerContext.close();
 
   await page.getByRole("button", { name: "概览", exact: true }).click();
