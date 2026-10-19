@@ -13,9 +13,11 @@ func permissionForRequest(r *http.Request) string {
 	switch {
 	case strings.HasPrefix(p, "/api/users"):
 		if strings.HasSuffix(p, "/role") {
-			return ""
+			return "roles:manage"
 		}
 		return "members:manage"
+	case strings.HasPrefix(p, "/api/roles"):
+		return "roles:manage"
 	case strings.HasPrefix(p, "/api/groups"), strings.HasPrefix(p, "/api/invitations"):
 		return "groups:manage"
 	case strings.HasPrefix(p, "/api/sites"):
@@ -211,14 +213,59 @@ func (s *Server) manageOrganization(w http.ResponseWriter, r *http.Request, u Us
 	}
 	jsonOut(w, code, out)
 }
-func (s *Server) listRoles(w http.ResponseWriter, r *http.Request, u User) {
-	out := []state.Role{}
-	for _, role := range s.store.snapshot().Roles {
-		if u.Role == "admin" || role.OrganizationID == u.OrganizationID {
-			out = append(out, role)
+
+// Delegation is bounded by the actor's current authority, not only organization.
+func delegatedPermissions(actor User, permissions []string) bool {
+	if actor.Role == "admin" {
+		return true
+	}
+	for _, p := range permissions {
+		if !containsID(actor.Permissions, p) {
+			return false
 		}
 	}
-	jsonOut(w, 200, map[string]any{"roles": out, "permissions": state.TenantPermissions})
+	return true
+}
+func manageableRole(actor User, role state.Role) bool {
+	return canManage(actor, role.OrganizationID, "roles:manage") && delegatedPermissions(actor, role.Permissions)
+}
+func manageableRoleMember(st State, actor, target User) bool {
+	if target.Role == "admin" {
+		return false
+	}
+	if !canManage(actor, target.OrganizationID, "roles:manage") {
+		return false
+	}
+	return delegatedPermissions(actor, rolePermissions(st, target))
+}
+func (s *Server) roleMembers(w http.ResponseWriter, r *http.Request, u User) {
+	if !hasPermission(u, "roles:manage") {
+		fail(w, 403, "role management permission required")
+		return
+	}
+	st := s.store.snapshot()
+	out := []map[string]any{}
+	for _, m := range st.Users {
+		if m.Role != "admin" && (u.Role == "admin" || m.OrganizationID == u.OrganizationID) {
+			out = append(out, map[string]any{"id": m.ID, "username": m.Username, "organizationID": m.OrganizationID, "role": "viewer", "roleID": m.RoleID, "manageable": manageableRoleMember(st, u, m)})
+		}
+	}
+	jsonOut(w, 200, out)
+}
+func (s *Server) listRoles(w http.ResponseWriter, r *http.Request, u User) {
+	out := []map[string]any{}
+	for _, role := range s.store.snapshot().Roles {
+		if u.Role == "admin" || role.OrganizationID == u.OrganizationID {
+			out = append(out, map[string]any{"id": role.ID, "name": role.Name, "organizationID": role.OrganizationID, "permissions": role.Permissions, "manageable": manageableRole(u, role)})
+		}
+	}
+	permissions := []string{}
+	for _, p := range state.TenantPermissions {
+		if hasPermission(u, p) {
+			permissions = append(permissions, p)
+		}
+	}
+	jsonOut(w, 200, map[string]any{"roles": out, "permissions": permissions})
 }
 func (s *Server) manageRole(w http.ResponseWriter, r *http.Request, u User) {
 	var body struct {
@@ -229,24 +276,39 @@ func (s *Server) manageRole(w http.ResponseWriter, r *http.Request, u User) {
 	if r.Method != "DELETE" && !decode(w, r, &body) {
 		return
 	}
+	if !delegatedPermissions(u, body.Permissions) {
+		fail(w, 403, "cannot delegate permissions outside your current authority")
+		return
+	}
 	id := r.PathValue("id")
 	create := r.Method == "POST"
 	if create {
 		id = randomID()[:16]
 	}
-	if body.OrganizationID == "default" {
-		body.OrganizationID = ""
+	org, err := selectedOrganization(s.store.snapshot(), u, body.OrganizationID)
+	if err != nil {
+		fail(w, 404, "organization not found")
+		return
 	}
-	out := state.Role{ID: id, Name: strings.TrimSpace(body.Name), OrganizationID: body.OrganizationID, Permissions: body.Permissions}
+	out := state.Role{ID: id, Name: strings.TrimSpace(body.Name), OrganizationID: org, Permissions: body.Permissions}
 	affected := []string{}
-	err := s.store.update(func(st *State) error {
+	err = s.store.update(func(st *State) error {
 		if create {
+			if !canManage(u, org, "roles:manage") {
+				return fmt.Errorf("role management permission required")
+			}
 			st.Roles = append(st.Roles, out)
 			return nil
 		}
 		for i, role := range st.Roles {
 			if role.ID != id {
 				continue
+			}
+			if !manageableRole(u, role) {
+				return fmt.Errorf("role not manageable within current authority")
+			}
+			if body.OrganizationID != "" && org != role.OrganizationID {
+				return fmt.Errorf("role organization cannot change")
 			}
 			out.OrganizationID = role.OrganizationID
 			for j := range st.Users {
@@ -291,11 +353,28 @@ func (s *Server) assignRole(w http.ResponseWriter, r *http.Request, u User) {
 	var out User
 	err := s.store.update(func(st *State) error {
 		for i := range st.Users {
-			if st.Users[i].ID == r.PathValue("id") && st.Users[i].Role != "admin" {
-				st.Users[i].RoleID = body.RoleID
-				out = st.Users[i]
-				return nil
+			m := &st.Users[i]
+			if m.ID != r.PathValue("id") {
+				continue
 			}
+			if !manageableRoleMember(*st, u, *m) {
+				return fmt.Errorf("member role exceeds your organization or current authority")
+			}
+			if body.RoleID != "" {
+				found := false
+				for _, role := range st.Roles {
+					if role.ID == body.RoleID && role.OrganizationID == m.OrganizationID && manageableRole(u, role) {
+						found = true
+						break
+					}
+				}
+				if !found {
+					return fmt.Errorf("role not assignable within current authority")
+				}
+			}
+			m.RoleID = body.RoleID
+			out = *m
+			return nil
 		}
 		return fmt.Errorf("member not found")
 	})

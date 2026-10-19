@@ -237,6 +237,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/organizations", s.require(true, s.manageOrganization))
 	mux.HandleFunc("PATCH /api/organizations/{id}", s.require(true, s.manageOrganization))
 	mux.HandleFunc("DELETE /api/organizations/{id}", s.require(true, s.manageOrganization))
+	mux.HandleFunc("GET /api/role-members", s.require(false, s.roleMembers))
 	mux.HandleFunc("GET /api/roles", s.require(false, s.listRoles))
 	mux.HandleFunc("POST /api/roles", s.require(true, s.manageRole))
 	mux.HandleFunc("PATCH /api/roles/{id}", s.require(true, s.manageRole))

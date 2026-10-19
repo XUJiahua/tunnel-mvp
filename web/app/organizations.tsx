@@ -3,12 +3,14 @@ import { FormEvent, useCallback, useEffect, useState } from "react";
 import { api } from "./api";
 type Org = { id: string; name: string };
 type Role = {
+  manageable?: boolean;
   id: string;
   name: string;
   organizationID?: string;
   permissions: string[];
 };
 type Member = {
+  manageable?: boolean;
   id: string;
   username: string;
   role: string;
@@ -16,6 +18,7 @@ type Member = {
   roleID?: string;
 };
 const labels: Record<string, string> = {
+  "roles:manage": "组织角色定义与分配（受自身能力上限约束）",
   "sites:manage": "站点、令牌与 Agent 管理",
   "applications:manage": "应用管理与诊断",
   "members:manage": "普通成员、密码与授权管理",
@@ -23,13 +26,21 @@ const labels: Record<string, string> = {
   "audit:read": "组织审计查询",
   "applications:access": "访问组织内全部应用",
 };
-export function OrganizationsPanel({ onChanged }: { onChanged: () => void }) {
+export function OrganizationsPanel({
+  onChanged,
+  globalAdmin = true,
+  organizationID = "default",
+}: {
+  onChanged: () => void;
+  globalAdmin?: boolean;
+  organizationID?: string;
+}) {
   const [orgs, setOrgs] = useState<Org[]>([]),
     [roles, setRoles] = useState<Role[]>([]),
     [members, setMembers] = useState<Member[]>([]);
   const [permissions, setPermissions] = useState<string[]>([]),
     [editing, setEditing] = useState<Role | null>(null),
-    [roleOrg, setRoleOrg] = useState("default");
+    [roleOrg, setRoleOrg] = useState(organizationID);
   const [error, setError] = useState(""),
     [busy, setBusy] = useState(false);
   const load = useCallback(async () => {
@@ -37,7 +48,7 @@ export function OrganizationsPanel({ onChanged }: { onChanged: () => void }) {
       const [o, r, m] = await Promise.all([
         api<Org[]>("/organizations"),
         api<{ roles: Role[]; permissions: string[] }>("/roles"),
-        api<Member[]>("/users"),
+        api<Member[]>(globalAdmin ? "/users" : "/role-members"),
       ]);
       setOrgs(o);
       setRoles(r.roles);
@@ -46,7 +57,7 @@ export function OrganizationsPanel({ onChanged }: { onChanged: () => void }) {
     } catch (e) {
       setError((e as Error).message);
     }
-  }, []);
+  }, [globalAdmin]);
   useEffect(() => {
     void load();
   }, [load]);
@@ -97,77 +108,84 @@ export function OrganizationsPanel({ onChanged }: { onChanged: () => void }) {
   return (
     <>
       <p className="permission-note">
-        一个成员属于一个组织。组织角色只委派本组织管理能力；角色定义与分配由全局管理员维护。管理应用与访问应用分别授权。
+        一个成员属于一个组织。组织角色只委派本组织管理能力；全局管理员可委派角色管理；组织操作员只能管理不超过自身能力的角色和成员。管理应用与访问应用分别授权。
       </p>
       {error && (
         <p className="form-error" role="alert">
           {error}
         </p>
       )}
-      <form className="group-form" onSubmit={createOrg}>
-        <h3>创建组织</h3>
-        <label className="field">
-          <span>组织名称</span>
-          <input name="name" required maxLength={100} />
-        </label>
-        <button className="primary" disabled={busy}>
-          创建组织
-        </button>
-      </form>
-      <div className="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>组织</th>
-              <th>ID</th>
-              <th>操作</th>
-            </tr>
-          </thead>
-          <tbody>
-            {orgs.map((o) => (
-              <tr key={o.id}>
-                <td>{o.name}</td>
-                <td>
-                  <code>{o.id}</code>
-                </td>
-                <td>
-                  {o.id !== "default" && (
-                    <>
-                      <button
-                        className="subtle"
-                        disabled={busy}
-                        onClick={() => {
-                          const name = window.prompt("新的组织名称", o.name);
-                          if (name)
-                            void mutate(`/organizations/${o.id}`, "PATCH", {
-                              name,
-                            });
-                        }}
-                      >
-                        重命名组织
-                      </button>
-                      <button
-                        className="subtle danger"
-                        disabled={busy}
-                        onClick={() => {
-                          if (
-                            window.confirm(
-                              `删除空组织「${o.name}」？请先清理成员、站点、用户组、邀请和角色。`,
-                            )
-                          )
-                            void mutate(`/organizations/${o.id}`, "DELETE");
-                        }}
-                      >
-                        删除空组织
-                      </button>
-                    </>
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      {globalAdmin && (
+        <>
+          <form className="group-form" onSubmit={createOrg}>
+            <h3>创建组织</h3>
+            <label className="field">
+              <span>组织名称</span>
+              <input name="name" required maxLength={100} />
+            </label>
+            <button className="primary" disabled={busy}>
+              创建组织
+            </button>
+          </form>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>组织</th>
+                  <th>ID</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                {orgs.map((o) => (
+                  <tr key={o.id}>
+                    <td>{o.name}</td>
+                    <td>
+                      <code>{o.id}</code>
+                    </td>
+                    <td>
+                      {o.id !== "default" && (
+                        <>
+                          <button
+                            className="subtle"
+                            disabled={busy}
+                            onClick={() => {
+                              const name = window.prompt(
+                                "新的组织名称",
+                                o.name,
+                              );
+                              if (name)
+                                void mutate(`/organizations/${o.id}`, "PATCH", {
+                                  name,
+                                });
+                            }}
+                          >
+                            重命名组织
+                          </button>
+                          <button
+                            className="subtle danger"
+                            disabled={busy}
+                            onClick={() => {
+                              if (
+                                window.confirm(
+                                  `删除空组织「${o.name}」？请先清理成员、站点、用户组、邀请和角色。`,
+                                )
+                              )
+                                void mutate(`/organizations/${o.id}`, "DELETE");
+                            }}
+                          >
+                            删除空组织
+                          </button>
+                        </>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
       <form
         key={editing?.id || "new"}
         className="group-form"
@@ -179,7 +197,7 @@ export function OrganizationsPanel({ onChanged }: { onChanged: () => void }) {
           <select
             aria-label="角色所属组织"
             value={roleOrg}
-            disabled={!!editing}
+            disabled={!!editing || !globalAdmin}
             onChange={(e) => setRoleOrg(e.target.value)}
           >
             {orgs.map((o) => (
@@ -248,7 +266,7 @@ export function OrganizationsPanel({ onChanged }: { onChanged: () => void }) {
                 <td>
                   <button
                     className="subtle"
-                    disabled={busy}
+                    disabled={busy || r.manageable === false}
                     onClick={() => {
                       setEditing(r);
                       setRoleOrg(r.organizationID || "default");
@@ -258,7 +276,7 @@ export function OrganizationsPanel({ onChanged }: { onChanged: () => void }) {
                   </button>
                   <button
                     className="subtle danger"
-                    disabled={busy}
+                    disabled={busy || r.manageable === false}
                     onClick={() => {
                       if (
                         window.confirm(
@@ -278,7 +296,7 @@ export function OrganizationsPanel({ onChanged }: { onChanged: () => void }) {
       </div>
       <h3>成员角色</h3>
       <p className="muted">
-        先在左侧选择组织范围，再从“访问权限”创建该组织成员。角色变更会让该成员全部设备退出。
+        角色变更会让该成员全部设备退出。只能分配自身权限范围内的角色；更高权限的成员由全局管理员维护。
       </p>
       <div className="table-wrap">
         <table>
@@ -300,7 +318,7 @@ export function OrganizationsPanel({ onChanged }: { onChanged: () => void }) {
                   <td>
                     <select
                       aria-label={`角色 · ${m.username}`}
-                      disabled={busy}
+                      disabled={busy || m.manageable === false}
                       value={m.roleID || ""}
                       onChange={(e) => {
                         if (
@@ -321,7 +339,11 @@ export function OrganizationsPanel({ onChanged }: { onChanged: () => void }) {
                             (m.organizationID || ""),
                         )
                         .map((r) => (
-                          <option key={r.id} value={r.id}>
+                          <option
+                            disabled={r.manageable === false}
+                            key={r.id}
+                            value={r.id}
+                          >
                             {r.name}
                           </option>
                         ))}

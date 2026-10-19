@@ -104,7 +104,7 @@ func TestOrganizationBoundariesAndRoleRevocation(t *testing.T) {
 		{"POST", "/api/invitations", map[string]any{"username": "bad-invite", "groupIDs": []string{gb.ID}}}, {"DELETE", "/api/invitations/" + inv.ID, nil},
 		{"PATCH", "/api/users/" + peer.ID + "/role", map[string]string{"roleID": roleB.ID}},
 		{"PATCH", "/api/users/" + operator.ID + "/disabled", map[string]bool{"disabled": true}},
-		{"POST", "/api/roles", map[string]string{"name": "escape"}}, {"POST", "/api/organizations", map[string]string{"name": "escape"}},
+		{"POST", "/api/roles", map[string]string{"name": "escape", "organizationID": b}}, {"POST", "/api/organizations", map[string]string{"name": "escape"}},
 		{"POST", "/api/administrators", map[string]string{"username": "escape", "password": testPassword, "currentPassword": testPassword}},
 	} {
 		res, body = f.request(t, c.method, c.path, c.body, ownerCookie, "")

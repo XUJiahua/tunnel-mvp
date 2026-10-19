@@ -12,7 +12,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const SchemaVersion = 9
+const SchemaVersion = 10
 const applicationID = 0x54554e4c // TUNL
 
 type sqliteBackend struct{ db *sql.DB }

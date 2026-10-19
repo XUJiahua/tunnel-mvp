@@ -2,7 +2,7 @@ package state
 
 import "fmt"
 
-var TenantPermissions = []string{"sites:manage", "applications:manage", "members:manage", "groups:manage", "audit:read", "applications:access"}
+var TenantPermissions = []string{"roles:manage", "sites:manage", "applications:manage", "members:manage", "groups:manage", "audit:read", "applications:access"}
 
 // The legacy/default organization is represented by an empty owner ID. Keeping
 // that representation preserves canonical old backup checksums and grants.

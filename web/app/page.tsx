@@ -851,12 +851,10 @@ export default function Home() {
             ...(permitted("applications:manage")
               ? [["bulk", "apps", "批量应用"]]
               : []),
-            ...(root
-              ? [
-                  ["organizations", "grid", "组织与角色"],
-                  ["administrators", "shield", "管理员"],
-                ]
+            ...(permitted("roles:manage")
+              ? [["organizations", "grid", "组织与角色"]]
               : []),
+            ...(root ? [["administrators", "shield", "管理员"]] : []),
             ...(permitted("audit:read")
               ? [["audit", "shield", "审计日志"]]
               : []),
@@ -1166,8 +1164,14 @@ export default function Home() {
             />
           )}
           {tab === "audit" && permitted("audit:read") && <AuditPanel />}
-          {tab === "organizations" && root && (
-            <OrganizationsPanel onChanged={() => refresh(user)} />
+          {tab === "organizations" && permitted("roles:manage") && (
+            <OrganizationsPanel
+              globalAdmin={root}
+              organizationID={
+                root ? organization : user.organizationID || "default"
+              }
+              onChanged={() => refresh(user)}
+            />
           )}
           {tab === "users" && permitted("members:manage") && (
             <>
