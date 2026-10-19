@@ -16,7 +16,6 @@ import (
 	"github.com/XUJiahua/tunnel-mvp/internal/config"
 	"github.com/XUJiahua/tunnel-mvp/internal/diagnostics"
 	"github.com/gorilla/websocket"
-	"github.com/rancher/remotedialer"
 )
 
 type rule struct {
@@ -171,10 +170,9 @@ func Run(ctx context.Context, c config.Agent, token string) error {
 	delay := time.Second
 	for ctx.Err() == nil {
 		var connected atomic.Bool
-		err = remotedialer.ConnectToProxyWithDialer(ctx, u.String(), headers, func(proto, address string) bool { return proto == "tcp" || proto == "tcp4" || proto == "tcp6" }, dialer, p.DialContext, func(_ context.Context, _ *remotedialer.Session) error {
+		err = connectTunnel(ctx, u.String(), headers, dialer, p.DialContext, func() {
 			connected.Store(true)
 			slog.Info("site tunnel connected", "site", c.SiteID)
-			return nil
 		})
 		if ctx.Err() != nil {
 			return nil

@@ -9,6 +9,7 @@ import {
   useState,
 } from "react";
 
+import { BulkApplications } from "./bulk";
 import { OrganizationsPanel } from "./organizations";
 import { AdministratorsPanel } from "./administrators";
 import { GroupsPanel } from "./groups";
@@ -41,6 +42,7 @@ type Site = {
 type Service = {
   organizationID?: string;
   accessible?: boolean;
+  customDomain?: string;
   id: string;
   name: string;
   siteID: string;
@@ -501,6 +503,7 @@ export default function Home() {
     sites: ["站点", "连接你的数据面，建立安全的出站隧道。"],
     services: ["应用", "从这里进入已授权的内网服务。"],
     users: ["访问权限", "为成员分配整站或单独应用访问权限。"],
+    bulk: ["批量应用", "批量创建、迁移或删除同组织应用。"],
     organizations: ["组织与角色", "设置组织边界、管理能力和角色成员。"],
     administrators: ["管理员", "管理全局管理员，敏感变更需要再次验证密码。"],
     groups: ["用户组与邀请", "管理共享授权，并邀请成员自行设置密码。"],
@@ -830,6 +833,9 @@ export default function Home() {
             ...(permitted("groups:manage")
               ? [["groups", "users", "用户组与邀请"]]
               : []),
+            ...(permitted("applications:manage")
+              ? [["bulk", "apps", "批量应用"]]
+              : []),
             ...(root
               ? [
                   ["organizations", "grid", "组织与角色"],
@@ -1100,6 +1106,14 @@ export default function Home() {
               )}
             </>
           )}
+          {tab === "bulk" && permitted("applications:manage") && (
+            <BulkApplications
+              key={root ? organization : user.organizationID || "default"}
+              sites={sites}
+              services={services}
+              onChanged={() => refresh(user)}
+            />
+          )}
           {tab === "sessions" && (
             <SessionsPanel admin={!!root} onExpired={sessionExpired} />
           )}
@@ -1276,6 +1290,7 @@ export default function Home() {
         <ResourceEditor
           editor={editor}
           oidcIssuer={authOptions.issuer}
+          globalAdmin={!!root}
           sites={sites.filter(
             (v) =>
               !("user" in editor) ||
@@ -1451,7 +1466,7 @@ export default function Home() {
                 </Field>
                 <Field
                   label="内网地址"
-                  hint="仅填写 HTTP / HTTPS 源地址，例如 http://grafana.internal:3000；DNS 在 Agent 侧解析。"
+                  hint="填写 HTTP / HTTPS 地址，可含已配置的子路径，例如 http://grafana.internal:3000/grafana/；DNS 在 Agent 侧解析。"
                 >
                   <input
                     name="url"
@@ -1460,8 +1475,20 @@ export default function Home() {
                     placeholder="http://10.10.1.20:3000"
                   />
                 </Field>
+                {root && (
+                  <Field
+                    label="自定义访问域名"
+                    hint="可选；仅主机名，不含协议/端口。需要单独配置 DNS 和 TLS。"
+                  >
+                    <input
+                      name="customDomain"
+                      placeholder="reports.example.net"
+                    />
+                  </Field>
+                )}
                 <p className="form-tip">
-                  添加应用后，请确保目标 IP 和端口位于 Agent 白名单内。
+                  添加应用后，请确保目标 IP 和端口位于 Agent
+                  白名单内。路径前缀在公网保留，应用需配置相同子路径。
                 </p>
               </>
             ) : (

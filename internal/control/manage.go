@@ -42,16 +42,18 @@ func (s *Server) updateSite(w http.ResponseWriter, r *http.Request, u User) {
 }
 func (s *Server) updateService(w http.ResponseWriter, r *http.Request, u User) {
 	var body struct {
-		Name string `json:"name"`
-		URL  string `json:"url"`
+		Name         string  `json:"name"`
+		SiteID       *string `json:"siteID"`
+		CustomDomain *string `json:"customDomain"`
+		URL          string  `json:"url"`
 	}
 	if !decode(w, r, &body) {
 		return
 	}
 	body.Name = strings.TrimSpace(body.Name)
-	target, err := config.Origin(body.URL)
+	target, err := config.TargetURL(body.URL)
 	if err != nil || body.Name == "" || len(body.Name) > 100 {
-		fail(w, 400, "name and HTTP/HTTPS origin required")
+		fail(w, 400, "name and valid HTTP/HTTPS target required")
 		return
 	}
 	unlock := s.lockMutation(r)
@@ -61,8 +63,35 @@ func (s *Server) updateService(w http.ResponseWriter, r *http.Request, u User) {
 	err = s.store.update(func(st *State) error {
 		for i := range st.Services {
 			if st.Services[i].ID == r.PathValue("id") && canManage(u, st.Services[i].OrganizationID, "applications:manage") {
-				changed = st.Services[i].URL != target.String()
-				st.Services[i].Name, st.Services[i].URL = body.Name, target.String()
+				svc := &st.Services[i]
+				if body.SiteID != nil && *body.SiteID != svc.SiteID {
+					found := false
+					for _, site := range st.Sites {
+						if site.ID == *body.SiteID && site.OrganizationID == svc.OrganizationID && canManage(u, site.OrganizationID, "applications:manage") {
+							found = true
+						}
+					}
+					if !found {
+						return fmt.Errorf("destination site not found in application organization")
+					}
+					svc.SiteID = *body.SiteID
+					changed = true
+				}
+				if body.CustomDomain != nil {
+					domain := strings.ToLower(strings.TrimSpace(*body.CustomDomain))
+					if domain != svc.CustomDomain {
+						if u.Role != "admin" {
+							return fmt.Errorf("custom domains require a global administrator")
+						}
+						if err := s.validateDomain(u, domain); err != nil {
+							return err
+						}
+						svc.CustomDomain = domain
+						changed = true
+					}
+				}
+				changed = changed || svc.URL != target.String()
+				svc.Name, svc.URL = body.Name, target.String()
 				out = st.Services[i]
 				return nil
 			}

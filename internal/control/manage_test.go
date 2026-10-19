@@ -69,9 +69,9 @@ func TestEditResourcesAndApplicationGrants(t *testing.T) {
 	if res.StatusCode != 200 || mustJSON[Site](t, b).ID != site.ID {
 		t.Fatal("rename changed identity")
 	}
-	res, _ = f.request(t, "PATCH", "/api/services/"+svc.ID, map[string]string{"name": "new app", "url": second.URL + "/forbidden"}, f.cookie, "")
+	res, _ = f.request(t, "PATCH", "/api/services/"+svc.ID, map[string]string{"name": "new app", "url": second.URL + "/../forbidden"}, f.cookie, "")
 	if res.StatusCode != 400 {
-		t.Fatal("accepted path target")
+		t.Fatal("accepted ambiguous path target")
 	}
 	res, b = f.request(t, "PATCH", "/api/services/"+svc.ID, map[string]string{"name": "new app", "url": second.URL}, f.cookie, "")
 	if res.StatusCode != 200 || mustJSON[Service](t, b).ID != svc.ID {

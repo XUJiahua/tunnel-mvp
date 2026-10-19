@@ -4,7 +4,13 @@ import { FormEvent, useEffect, useRef, useState } from "react";
 import { api } from "./api";
 
 type Site = { id: string; name: string };
-type Service = { id: string; siteID: string; name: string; url: string };
+type Service = {
+  customDomain?: string;
+  id: string;
+  siteID: string;
+  name: string;
+  url: string;
+};
 type User = {
   id: string;
   organizationID?: string;
@@ -74,6 +80,7 @@ export function Grants({
 export function ResourceEditor({
   editor,
   oidcIssuer,
+  globalAdmin,
   sites,
   services,
   onClose,
@@ -81,6 +88,7 @@ export function ResourceEditor({
 }: {
   editor: Editor;
   oidcIssuer: string;
+  globalAdmin: boolean;
   sites: Site[];
   services: Service[];
   onClose: () => void;
@@ -118,6 +126,8 @@ export function ResourceEditor({
         await api(`/services/${editor.service.id}`, "PATCH", {
           name: data.get("name"),
           url: data.get("url"),
+          siteID: data.get("siteID"),
+          ...(globalAdmin ? { customDomain: data.get("customDomain") } : {}),
         });
       if (editor.kind === "grants")
         await api(`/users/${editor.user.id}`, "PATCH", {
@@ -181,10 +191,34 @@ export function ResourceEditor({
                 defaultValue={editor.service.url}
               />
             </label>
+            <label className="field">
+              <span>迁移目标站点</span>
+              <select
+                aria-label="迁移目标站点"
+                name="siteID"
+                defaultValue={editor.service.siteID}
+              >
+                {sites.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {globalAdmin && (
+              <label className="field">
+                <span>自定义访问域名</span>
+                <input
+                  name="customDomain"
+                  defaultValue={editor.service.customDomain || ""}
+                  placeholder="reports.example.net"
+                />
+              </label>
+            )}
             <p className="form-tip">
-              修改地址会关闭本应用现有连接并撤销访问票据，请从控制台重新打开。应用
-              ID
-              和公网域名保留。更换为无关应用时建议新建应用，以隔离浏览器中的上游
+              修改目标、站点或访问域名会关闭现有连接并撤销访问票据。路径目标在公网保留相同前缀，应用自身需配置子路径；自定义域名需另行配置
+              DNS 和 TLS。应用 ID
+              和单应用授权保留，整站授权按新站点计算。换成无关应用请新建应用，避免复用上游
               Cookie。
             </p>
           </>

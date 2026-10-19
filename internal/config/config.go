@@ -168,3 +168,6 @@ func (a *Agent) Validate() error {
 	}
 	return nil
 }
+
+// TargetURL preserves a validated application path prefix; control/Agent origins remain path-free.
+func TargetURL(raw string) (*url.URL, error) { return state.ApplicationURL(raw) }

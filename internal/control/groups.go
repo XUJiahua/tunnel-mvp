@@ -195,6 +195,10 @@ func pruneGrantReferences(st *State) {
 		}
 		return out
 	}
+	for i := range st.Users {
+		st.Users[i].SiteIDs = filter(st.Users[i].SiteIDs, sites)
+		st.Users[i].ServiceIDs = filter(st.Users[i].ServiceIDs, services)
+	}
 	for i := range st.Groups {
 		g := &st.Groups[i]
 		g.MemberIDs = filter(g.MemberIDs, users)

@@ -36,7 +36,7 @@ def verify(directory: Path, version: str | None = None) -> None:
     if set(checksums) != {archive.name for archive in archives}:
         raise ValueError('Checksum manifest must contain exactly the six packages')
 
-    required = {'README.md', 'CHANGELOG.md', 'examples/server.json', 'examples/agent.json', 'docs/operations.md', 'docs/design/storage.md', 'docs/storage-operations.md', 'docs/design/groups-invitations.md', 'docs/groups-operations.md', 'docs/design/administrators.md', 'docs/administrator-operations.md', 'docs/design/organizations-roles.md', 'docs/organization-operations.md', 'docs/design/session-lifecycle.md', 'docs/session-operations.md', 'docs/design/oidc.md', 'docs/oidc-operations.md', 'examples/oidc/server.production.json', 'examples/oidc/server.development.json', 'examples/oidc/keycloak.compose.yaml'}
+    required = {'README.md', 'CHANGELOG.md', 'examples/server.json', 'examples/agent.json', 'docs/operations.md', 'docs/design/storage.md', 'docs/storage-operations.md', 'docs/design/groups-invitations.md', 'docs/groups-operations.md', 'docs/design/administrators.md', 'docs/administrator-operations.md', 'docs/design/organizations-roles.md', 'docs/organization-operations.md', 'docs/design/resources-targets.md', 'docs/resource-operations.md', 'docs/design/session-lifecycle.md', 'docs/session-operations.md', 'docs/design/oidc.md', 'docs/oidc-operations.md', 'examples/oidc/server.production.json', 'examples/oidc/server.development.json', 'examples/oidc/keycloak.compose.yaml'}
     for archive in archives:
         with archive.open('rb') as source:
             actual = hashlib.file_digest(source, 'sha256').hexdigest()

@@ -20,6 +20,8 @@
 
 - [组织与角色设计](docs/design/organizations-roles.md)与[操作手册](docs/organization-operations.md)：组织归属、自定义管理能力、隔离与角色撤销。
 
+- [资源与路径设计](docs/design/resources-targets.md)与[迁移/域名/批量手册](docs/resource-operations.md)。
+
 ## 已实现
 
 - 控制台登录、管理员 / 成员两种角色、按整站或单独应用分配访问权限；支持直接编辑成员授权、自助改密和管理员重置成员密码。
@@ -254,7 +256,7 @@ Compose 默认只将 Go 的 8080 绑定到公网机器的回环地址，由宿�
 - 优先将上游应用的 Public / External / Base URL 配为对应公网应用地址。
 - 仅重写指向已配置目标源的 `Location`，不抓取或重写 HTML / JavaScript 内容。
 - 不会自动代理页面硬编码的其他内部域名，也不重写跨源 OAuth 回调。OAuth 应注册公网回调地址。
-- 每个应用映射到源站根路径，暂不接受带路径的目标 URL。
+- 应用支持 origin 或相同的公网/内网路径前缀；路径目标需应用自身配置子路径，不通用改写 HTML/JS。全局管理员可绑定手工准备好 DNS/TLS 的自定义访问域名。
 - 清除上游 Cookie 的 Domain，保留 Path / HttpOnly / SameSite；HTTPS 公网访问强制添加 Secure。
 - 保留上游 CSP 和其他应用安全响应头，不通过 iframe 嵌入应用。
 - `tunnel_console`、`tunnel_access` 为保留 Cookie 名；`/_tunnel/entry` 为保留路径。

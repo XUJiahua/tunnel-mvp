@@ -46,7 +46,7 @@ func loadBackup(path string) (State, error) {
 	if err = decodeStrict(raw, &b); err != nil {
 		return State{}, fmt.Errorf("read backup: %w", err)
 	}
-	if b.Format != "tunnel-state" || (b.Version < 1 || b.Version > 4) || b.CreatedAt.IsZero() {
+	if b.Format != "tunnel-state" || (b.Version < 1 || b.Version > 5) || b.CreatedAt.IsZero() {
 		return State{}, fmt.Errorf("unsupported backup format/version")
 	}
 	if b.SHA256 != checksum(b.State) {
@@ -95,7 +95,7 @@ func Export(dir, kind, output string) (Summary, error) {
 		return Summary{}, err
 	}
 	defer b.close()
-	raw, err := json.MarshalIndent(Backup{"tunnel-state", 4, time.Now().UTC(), checksum(s), s}, "", "  ")
+	raw, err := json.MarshalIndent(Backup{"tunnel-state", 5, time.Now().UTC(), checksum(s), s}, "", "  ")
 	if err != nil {
 		return Summary{}, err
 	}

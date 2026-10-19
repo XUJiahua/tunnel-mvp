@@ -12,7 +12,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const SchemaVersion = 4
+const SchemaVersion = 5
 const applicationID = 0x54554e4c // TUNL
 
 type sqliteBackend struct{ db *sql.DB }
@@ -52,7 +52,7 @@ var schemaV3 = []string{
 var schema = append([]string{
 	`CREATE TABLE users (id TEXT PRIMARY KEY, position INTEGER NOT NULL UNIQUE, username TEXT NOT NULL UNIQUE, password_hash TEXT NOT NULL, role TEXT NOT NULL CHECK(role IN ('admin','viewer')), disabled INTEGER NOT NULL DEFAULT 0 CHECK(disabled IN (0,1)), oidc_issuer TEXT NOT NULL DEFAULT '', oidc_subject TEXT NOT NULL DEFAULT '', organization_id TEXT NOT NULL DEFAULT '', role_id TEXT NOT NULL DEFAULT '')`,
 	`CREATE TABLE sites (id TEXT PRIMARY KEY, position INTEGER NOT NULL UNIQUE, name TEXT NOT NULL, token_hash TEXT NOT NULL CHECK(length(token_hash)=64), created_at TEXT NOT NULL, organization_id TEXT NOT NULL DEFAULT '')`,
-	`CREATE TABLE services (id TEXT PRIMARY KEY, position INTEGER NOT NULL UNIQUE, name TEXT NOT NULL, site_id TEXT NOT NULL REFERENCES sites(id), url TEXT NOT NULL, organization_id TEXT NOT NULL DEFAULT '')`,
+	`CREATE TABLE services (id TEXT PRIMARY KEY, position INTEGER NOT NULL UNIQUE, name TEXT NOT NULL, site_id TEXT NOT NULL REFERENCES sites(id), url TEXT NOT NULL, organization_id TEXT NOT NULL DEFAULT '',custom_domain TEXT NOT NULL DEFAULT '')`,
 	`CREATE TABLE user_sites (user_id TEXT NOT NULL REFERENCES users(id), site_id TEXT NOT NULL REFERENCES sites(id), position INTEGER NOT NULL, PRIMARY KEY(user_id,site_id), UNIQUE(user_id,position))`,
 	`CREATE TABLE user_services (user_id TEXT NOT NULL REFERENCES users(id), service_id TEXT NOT NULL REFERENCES services(id), position INTEGER NOT NULL, PRIMARY KEY(user_id,service_id), UNIQUE(user_id,position))`,
 	`CREATE INDEX services_site ON services(site_id)`,
@@ -161,6 +161,9 @@ func openSQLite(path string) (backend, State, error) {
 			statements = append(statements, "ALTER TABLE users ADD COLUMN organization_id TEXT NOT NULL DEFAULT ''", "ALTER TABLE users ADD COLUMN role_id TEXT NOT NULL DEFAULT ''", "ALTER TABLE sites ADD COLUMN organization_id TEXT NOT NULL DEFAULT ''", "ALTER TABLE services ADD COLUMN organization_id TEXT NOT NULL DEFAULT ''")
 			statements = append(statements, schemaV4...)
 		}
+		if version < 5 {
+			statements = append(statements, "ALTER TABLE services ADD COLUMN custom_domain TEXT NOT NULL DEFAULT ''")
+		}
 		statements = append(statements, fmt.Sprintf("PRAGMA user_version=%d", SchemaVersion))
 		for _, statement := range statements {
 			if _, err = tx.Exec(statement); err != nil {
@@ -218,7 +221,7 @@ func (b *sqliteBackend) save(s State) error {
 		}
 	}
 	for i, v := range s.Services {
-		if _, err = tx.Exec("INSERT INTO services VALUES(?,?,?,?,?,?)", v.ID, i, v.Name, v.SiteID, v.URL, v.OrganizationID); err != nil {
+		if _, err = tx.Exec("INSERT INTO services VALUES(?,?,?,?,?,?,?)", v.ID, i, v.Name, v.SiteID, v.URL, v.OrganizationID, v.CustomDomain); err != nil {
 			return err
 		}
 	}
@@ -335,13 +338,13 @@ func loadSQLite(reader sqlReader) (State, error) {
 	if err != nil {
 		return s, err
 	}
-	rows, err = reader.Query("SELECT id,name,site_id,url,organization_id FROM services ORDER BY position")
+	rows, err = reader.Query("SELECT id,name,site_id,url,organization_id,custom_domain FROM services ORDER BY position")
 	if err != nil {
 		return s, err
 	}
 	for rows.Next() {
 		var v Service
-		if err = rows.Scan(&v.ID, &v.Name, &v.SiteID, &v.URL, &v.OrganizationID); err != nil {
+		if err = rows.Scan(&v.ID, &v.Name, &v.SiteID, &v.URL, &v.OrganizationID, &v.CustomDomain); err != nil {
 			_ = rows.Close()
 			return s, err
 		}

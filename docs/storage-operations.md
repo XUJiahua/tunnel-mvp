@@ -2,7 +2,7 @@
 
 本手册适用于包含存储批次代码的构建。默认后端仍是 JSON；当前 Release 中的旧二进制不一定包含这些命令。先执行 `tunnel storage --help` 确认。
 
-当前组织/角色批次使用 SQLite schema v4、backup v4，并继续读取旧 backup v1–v3。已有 SQLite v1–v3 首次被 Server、inspect 或 export 打开时会事务升级；**先用旧二进制导出并备份停机目录，再换程序**。失败不会留下部分 schema。回滚须使用升级前备份。详见 [OIDC 升级手册](oidc-operations.md)。
+当前资源批次使用 SQLite schema v5、backup v5，并继续读取旧 backup v1–v4。已有 SQLite v1–v4 首次被 Server、inspect 或 export 打开时会事务升级；**先用旧二进制导出并备份停机目录，再换程序**。失败不会留下部分 schema。回滚须使用升级前备份。详见 [OIDC 升级手册](oidc-operations.md)。
 
 ## 1. 选择后端
 

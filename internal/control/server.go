@@ -72,6 +72,13 @@ func New(c config.Server, password string) (*Server, error) {
 	a, _ := url.Parse(c.AccessURL)
 	h, _ := bcrypt.GenerateFromPassword([]byte(randomID()), bcrypt.DefaultCost)
 	s := &Server{cfg: c, store: st, auth: newAuth(), secure: p.Scheme == "https", public: p, access: a, auditFile: af, dummyHash: string(h), connections: map[string]context.CancelFunc{}, live: map[string]liveRequest{}, pools: map[string]pooledTransport{}, reports: map[string]probeReport{}, metricsToken: os.Getenv("TUNNEL_METRICS_TOKEN"), diagnosticCache: map[string]diagnosticRecord{}}
+	for _, svc := range st.snapshot().Services {
+		if err := s.validateDomain(User{Role: "admin"}, svc.CustomDomain); err != nil {
+			af.Close()
+			st.Close()
+			return nil, err
+		}
+	}
 	s.tunnel = remotedialer.New(func(r *http.Request) (string, bool, error) {
 		id, ok := s.authenticatedAgent(r)
 		return id, ok, nil
@@ -163,6 +170,9 @@ func (s *Server) Run(ctx context.Context) error {
 }
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/services/bulk", s.require(true, s.bulkCreate))
+	mux.HandleFunc("POST /api/services/bulk-delete", s.require(true, s.bulkServices))
+	mux.HandleFunc("POST /api/services/bulk-move", s.require(true, s.bulkServices))
 	mux.HandleFunc("GET /api/group-members", s.require(false, s.groupMembers))
 	mux.HandleFunc("GET /api/organizations", s.require(false, s.listOrganizations))
 	mux.HandleFunc("POST /api/organizations", s.require(true, s.manageOrganization))
@@ -484,23 +494,29 @@ func (s *Server) listServices(w http.ResponseWriter, r *http.Request, u User) {
 }
 func (s *Server) createService(w http.ResponseWriter, r *http.Request, u User) {
 	var b struct {
-		Name   string `json:"name"`
-		SiteID string `json:"siteID"`
-		URL    string `json:"url"`
+		Name         string `json:"name"`
+		SiteID       string `json:"siteID"`
+		URL          string `json:"url"`
+		CustomDomain string `json:"customDomain"`
 	}
 	if !decode(w, r, &b) {
 		return
 	}
-	target, err := config.Origin(b.URL)
+	target, err := config.TargetURL(b.URL)
 	if err != nil {
-		fail(w, 400, "target must be an http(s) origin without path or credentials")
+		fail(w, 400, "target must be an HTTP/HTTPS origin or plain mount path without credentials, query or fragment")
 		return
 	}
 	if strings.TrimSpace(b.Name) == "" || len(b.Name) > 100 {
 		fail(w, 400, "name must be 1–100 bytes")
 		return
 	}
-	svc := Service{ID: randomID()[:16], Name: b.Name, SiteID: b.SiteID, URL: target.String()}
+	b.CustomDomain = strings.ToLower(strings.TrimSpace(b.CustomDomain))
+	if err := s.validateDomain(u, b.CustomDomain); err != nil {
+		fail(w, 400, err.Error())
+		return
+	}
+	svc := Service{CustomDomain: b.CustomDomain, ID: randomID()[:16], Name: b.Name, SiteID: b.SiteID, URL: target.String()}
 	err = s.store.update(func(st *State) error {
 		for _, site := range st.Sites {
 			if site.ID == b.SiteID && canManage(u, site.OrganizationID, "applications:manage") {

@@ -81,7 +81,7 @@ func TestSQLiteV2GroupUpgradeAndRollback(t *testing.T) {
 			initial := sample(t)
 			s := mustOpen(t, dir, SQLite, initial)
 			db := s.disk.(*sqliteBackend).db
-			for _, sql := range []string{"DROP TABLE roles", "DROP TABLE organizations", "ALTER TABLE users DROP COLUMN organization_id", "ALTER TABLE users DROP COLUMN role_id", "ALTER TABLE sites DROP COLUMN organization_id", "ALTER TABLE services DROP COLUMN organization_id", "DROP TABLE groups", "DROP TABLE invites", "PRAGMA user_version=2"} {
+			for _, sql := range []string{"ALTER TABLE services DROP COLUMN custom_domain", "DROP TABLE roles", "DROP TABLE organizations", "ALTER TABLE users DROP COLUMN organization_id", "ALTER TABLE users DROP COLUMN role_id", "ALTER TABLE sites DROP COLUMN organization_id", "ALTER TABLE services DROP COLUMN organization_id", "DROP TABLE groups", "DROP TABLE invites", "PRAGMA user_version=2"} {
 				if _, err := db.Exec(sql); err != nil {
 					t.Fatal(err)
 				}

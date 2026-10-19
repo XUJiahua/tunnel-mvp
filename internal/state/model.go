@@ -42,6 +42,7 @@ type Site struct {
 	CreatedAt      time.Time `json:"createdAt"`
 }
 type Service struct {
+	CustomDomain   string `json:"customDomain,omitempty"`
 	OrganizationID string `json:"organizationID,omitempty"`
 	ID             string `json:"id"`
 	Name           string `json:"name"`
@@ -126,6 +127,7 @@ func Validate(s *State) error {
 	if s.Services == nil {
 		s.Services = []Service{}
 	}
+	domains := map[string]bool{}
 	sites, services, users, names := map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}
 	for _, v := range s.Sites {
 		token, err := hex.DecodeString(v.TokenHash)
@@ -135,11 +137,14 @@ func Validate(s *State) error {
 		sites[v.ID] = true
 	}
 	for _, v := range s.Services {
-		target, err := url.Parse(v.URL)
-		if !resourceID.MatchString(v.ID) || services[v.ID] || !validName(v.Name) || !sites[v.SiteID] || err != nil || target.Hostname() == "" || (target.Scheme != "http" && target.Scheme != "https") || target.User != nil || target.RawQuery != "" || target.ForceQuery || target.Fragment != "" || (target.Path != "" && target.Path != "/") {
+		_, err := ApplicationURL(v.URL)
+		if !resourceID.MatchString(v.ID) || services[v.ID] || !validName(v.Name) || !sites[v.SiteID] || err != nil || v.CustomDomain != "" && (!ValidCustomDomain(v.CustomDomain) || domains[v.CustomDomain]) {
 			return fmt.Errorf("invalid application or site reference %q", v.ID)
 		}
 		services[v.ID] = true
+		if v.CustomDomain != "" {
+			domains[v.CustomDomain] = true
+		}
 	}
 	admins := 0
 	identities := map[Identity]bool{}

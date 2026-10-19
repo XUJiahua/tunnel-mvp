@@ -16,6 +16,9 @@ import (
 func (s *Server) serviceURL(id string) *url.URL {
 	u := *s.access
 	u.Host = id + "." + s.access.Host
+	if svc, ok := s.store.service(id); ok && svc.CustomDomain != "" {
+		u.Host = customHost(svc.CustomDomain, s.access)
+	}
 	return &u
 }
 func (s *Server) launch(w http.ResponseWriter, r *http.Request, u User) {
@@ -71,22 +74,12 @@ func (s *Server) gateway(w http.ResponseWriter, r *http.Request) {
 	}()
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Referrer-Policy", "no-referrer")
-	suffix := "." + s.access.Host
-	host := strings.ToLower(r.Host)
-	if !strings.HasSuffix(host, strings.ToLower(suffix)) {
-		http.NotFound(w, r)
-		return
-	}
-	id := strings.TrimSuffix(host, strings.ToLower(suffix))
-	if strings.Contains(id, ".") {
-		http.NotFound(w, r)
-		return
-	}
-	svc, ok := s.store.service(id)
+	svc, ok := s.serviceForHost(r.Host)
 	if !ok {
 		http.NotFound(w, r)
 		return
 	}
+	id := svc.ID
 	if r.URL.Path == "/_tunnel/entry" {
 		if r.Method != "GET" {
 			fail(w, 405, "GET required")
@@ -109,7 +102,7 @@ func (s *Server) gateway(w http.ResponseWriter, r *http.Request) {
 		s.auth.access[digest(token)] = g
 		s.auth.mu.Unlock()
 		http.SetCookie(w, &http.Cookie{Name: accessCookie, Value: token, Path: "/", HttpOnly: true, Secure: s.secure, SameSite: http.SameSiteLaxMode, MaxAge: 3600})
-		http.Redirect(w, r, "/", http.StatusSeeOther)
+		http.Redirect(w, r, mountPath(svc.URL), http.StatusSeeOther)
 		return
 	}
 	c, err := r.Cookie(accessCookie)
@@ -129,20 +122,26 @@ func (s *Server) gateway(w http.ResponseWriter, r *http.Request) {
 		fail(w, 503, "site is offline")
 		return
 	}
+	if !s.mountGuard(w, r, svc) {
+		return
+	}
 	ctx, release := s.trackRequest(r.Context(), u, g)
 	defer release()
 	r = r.WithContext(ctx)
 	target, _ := url.Parse(svc.URL)
+	upstreamOrigin := *target
+	upstreamOrigin.Path = ""
+	upstreamOrigin.RawPath = ""
 	transport := s.serviceTransport(svc)
 	s.accessMu.RUnlock()
 	locked = false
 	s.stats.requests.Add(1)
-	public := s.serviceURL(id)
+	public := &url.URL{Scheme: s.access.Scheme, Host: r.Host}
 	proxy := &httputil.ReverseProxy{
 		Transport: transport, FlushInterval: -1,
 		ErrorLog: slog.NewLogLogger(slog.Default().With("site_id", svc.SiteID, "service_id", svc.ID, "target", svc.URL).Handler(), slog.LevelWarn),
 		Rewrite: func(pr *httputil.ProxyRequest) {
-			pr.SetURL(target)
+			pr.SetURL(&upstreamOrigin)
 			pr.Out.Header.Del("X-Forwarded-For")
 			pr.Out.Header.Del("X-Forwarded-Host")
 			pr.Out.Header.Del("X-Forwarded-Proto")
@@ -152,7 +151,12 @@ func (s *Server) gateway(w http.ResponseWriter, r *http.Request) {
 			pr.Out.Header.Set("X-Forwarded-Proto", public.Scheme)
 			// Translate same-application origins for upstream CSRF and WebSocket checks.
 			if pr.Out.Header.Get("Origin") == public.String() {
-				pr.Out.Header.Set("Origin", target.String())
+				pr.Out.Header.Set("Origin", upstreamOrigin.String())
+			}
+			if ref, err := url.Parse(pr.Out.Header.Get("Referer")); err == nil && ref.Host == public.Host && ref.Scheme == public.Scheme {
+				ref.Host = target.Host
+				ref.Scheme = target.Scheme
+				pr.Out.Header.Set("Referer", ref.String())
 			}
 			pr.Out.Header.Del("Cookie")
 			for _, c := range pr.In.Cookies() {
@@ -182,10 +186,11 @@ func (s *Server) gateway(w http.ResponseWriter, r *http.Request) {
 				}
 				resp.Header.Add("Set-Cookie", c.String())
 			}
-			if resp.Header.Get("Access-Control-Allow-Origin") == target.String() {
+			if resp.Header.Get("Access-Control-Allow-Origin") == upstreamOrigin.String() {
 				resp.Header.Set("Access-Control-Allow-Origin", public.String())
 			}
-			resp.Header.Set("Referrer-Policy", "no-referrer")
+			// Preserve same-application CSRF referers; never send them cross-origin.
+			resp.Header.Set("Referrer-Policy", "same-origin")
 			return nil
 		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {

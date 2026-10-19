@@ -81,6 +81,11 @@ func TestOrganizationBoundariesAndRoleRevocation(t *testing.T) {
 		method, path string
 		body         any
 	}{
+
+		{"POST", "/api/services/bulk-delete", map[string]any{"ids": []string{app.ID, foreign.ID}}},
+		{"POST", "/api/services/bulk-move", map[string]any{"ids": []string{app.ID, foreign.ID}, "siteID": sa}},
+		{"POST", "/api/services/bulk", map[string]any{"services": []map[string]string{{"name": "bad bulk", "siteID": sb, "url": upstream.URL}}}},
+		{"PATCH", "/api/services/" + app.ID, map[string]string{"name": app.Name, "url": app.URL, "customDomain": "steal.customer.test"}},
 		{"PATCH", "/api/sites/" + sb, map[string]string{"name": "stolen"}},
 		{"DELETE", "/api/sites/" + sb, nil}, {"POST", "/api/sites/" + sb + "/rotate", nil},
 		{"PATCH", "/api/services/" + foreign.ID, map[string]string{"name": "stolen", "url": upstream.URL}},
