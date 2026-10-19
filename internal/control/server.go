@@ -159,6 +159,16 @@ func (s *Server) Run(ctx context.Context) error {
 }
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/invitations", s.require(true, s.listInvites))
+	mux.HandleFunc("POST /api/invitations", s.require(true, s.createInvite))
+	mux.HandleFunc("DELETE /api/invitations/{id}", s.require(true, s.deleteInvite))
+	mux.HandleFunc("POST /api/invitations/inspect", s.inspectInvite)
+	mux.HandleFunc("POST /api/invitations/accept", s.acceptInvite)
+	mux.HandleFunc("GET /api/groups", s.require(true, s.listGroups))
+	mux.HandleFunc("GET /api/me/groups", s.require(false, s.listGroups))
+	mux.HandleFunc("POST /api/groups", s.require(true, s.saveGroup))
+	mux.HandleFunc("PATCH /api/groups/{id}", s.require(true, s.saveGroup))
+	mux.HandleFunc("DELETE /api/groups/{id}", s.require(true, s.deleteGroup))
 	mux.HandleFunc("GET /api/me/sessions", s.require(false, s.listSessions))
 	mux.HandleFunc("GET /api/sessions", s.require(true, s.listSessions))
 	mux.HandleFunc("DELETE /api/me/sessions/{id}", s.require(false, s.deleteSession))
@@ -385,6 +395,7 @@ func (s *Server) deleteSite(w http.ResponseWriter, r *http.Request, u User) {
 					}
 					st.Users[i].ServiceIDs = apps
 				}
+				pruneGrantReferences(st)
 				return nil
 			}
 		}
@@ -486,6 +497,7 @@ func (s *Server) deleteService(w http.ResponseWriter, r *http.Request, u User) {
 					}
 					st.Users[j].ServiceIDs = apps
 				}
+				pruneGrantReferences(st)
 				return nil
 			}
 		}
@@ -584,6 +596,7 @@ func (s *Server) deleteUser(w http.ResponseWriter, r *http.Request, u User) {
 		for i, v := range st.Users {
 			if v.ID == id && v.Role != "admin" {
 				st.Users = append(st.Users[:i], st.Users[i+1:]...)
+				pruneGrantReferences(st)
 				return nil
 			}
 		}

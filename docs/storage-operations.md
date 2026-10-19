@@ -2,7 +2,7 @@
 
 本手册适用于包含存储批次代码的构建。默认后端仍是 JSON；当前 Release 中的旧二进制不一定包含这些命令。先执行 `tunnel storage --help` 确认。
 
-第三批身份功能使用 SQLite schema v2、backup v2，并继续读取旧 backup v1。已有 SQLite v1 首次被 Server、inspect 或 export 打开时会事务升级；**先用旧二进制导出并备份停机目录，再换程序**。失败不会留下部分 schema。回滚须使用升级前备份。详见 [OIDC 升级手册](oidc-operations.md)。
+第三批身份功能使用 SQLite schema v3、backup v3，并继续读取旧 backup v1/v2。已有 SQLite v1/v2 首次被 Server、inspect 或 export 打开时会事务升级；**先用旧二进制导出并备份停机目录，再换程序**。失败不会留下部分 schema。回滚须使用升级前备份。详见 [OIDC 升级手册](oidc-operations.md)。
 
 ## 1. 选择后端
 
@@ -96,3 +96,5 @@ JSON/SQLite 状态文件均可在停机后随整个数据目录备份。可移�
 SQLite 正常采用 DELETE journal，事务完成后不应依赖 WAL 文件。发生异常停机后，优先用相同版本在原目录打开现有数据库，让 SQLite 按自身机制恢复；不要只拷贝一个仍在写入的数据库文件。
 
 程序的文件锁只保护遵守协议的新版本命令，旧版 Server 不认识它。仍需确保旧服务已停机，也不要让多个主机共享该目录。SQLite、导出命令和目录锁都不构成控制面 HA。
+
+第五批起 restore 会清空未使用邀请，避免旧备份复活已消费 token；已有组成员和授权保留，详见 [用户组手册](groups-operations.md)。

@@ -31,7 +31,7 @@ func TestIdentityPersistenceAndBackup(t *testing.T) {
 			raw, _ := os.ReadFile(backup)
 			var b Backup
 			_ = json.Unmarshal(raw, &b)
-			if b.Version != 2 {
+			if b.Version != 3 {
 				t.Fatal("identity backup must be versioned against old readers")
 			}
 			for _, target := range []string{JSON, SQLite} {
@@ -80,7 +80,7 @@ func legacySQLite(t *testing.T, dir string, invalid bool) State {
 	s := mustOpen(t, dir, SQLite, initial)
 	db := s.disk.(*sqliteBackend).db
 	// Produce the actual v1 table layout and version, not just a changed pragma.
-	for _, statement := range []string{"DROP INDEX users_identity", "ALTER TABLE users DROP COLUMN disabled", "ALTER TABLE users DROP COLUMN oidc_issuer", "ALTER TABLE users DROP COLUMN oidc_subject", "PRAGMA user_version=1"} {
+	for _, statement := range []string{"DROP TABLE groups", "DROP TABLE invites", "DROP INDEX users_identity", "ALTER TABLE users DROP COLUMN disabled", "ALTER TABLE users DROP COLUMN oidc_issuer", "ALTER TABLE users DROP COLUMN oidc_subject", "PRAGMA user_version=1"} {
 		if _, err := db.Exec(statement); err != nil {
 			t.Fatal(err)
 		}
@@ -102,7 +102,7 @@ func TestSQLiteV1UpgradeAndValidationRollback(t *testing.T) {
 			t.Fatal("upgrade changed existing data")
 		}
 		var version int
-		if err := s.disk.(*sqliteBackend).db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 2 {
+		if err := s.disk.(*sqliteBackend).db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != SchemaVersion {
 			t.Fatal("not upgraded", version, err)
 		}
 		if err := s.Update(func(next *State) error {

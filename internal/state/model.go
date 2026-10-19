@@ -43,7 +43,26 @@ type Service struct {
 	SiteID string `json:"siteID"`
 	URL    string `json:"url"`
 }
+type Group struct {
+	ID         string   `json:"id"`
+	Name       string   `json:"name"`
+	MemberIDs  []string `json:"memberIDs"`
+	SiteIDs    []string `json:"siteIDs"`
+	ServiceIDs []string `json:"serviceIDs"`
+}
+type Invite struct {
+	ID         string    `json:"id"`
+	Username   string    `json:"username"`
+	TokenHash  string    `json:"tokenHash"`
+	CreatedAt  time.Time `json:"createdAt"`
+	ExpiresAt  time.Time `json:"expiresAt"`
+	SiteIDs    []string  `json:"siteIDs"`
+	ServiceIDs []string  `json:"serviceIDs"`
+	GroupIDs   []string  `json:"groupIDs"`
+}
 type State struct {
+	Groups   []Group   `json:"groups,omitempty"`
+	Invites  []Invite  `json:"invites,omitempty"`
 	Users    []User    `json:"users"`
 	Sites    []Site    `json:"sites"`
 	Services []Service `json:"services"`
@@ -142,6 +161,59 @@ func Validate(s *State) error {
 	}
 	if admins == 0 {
 		return fmt.Errorf("state must contain at least one enabled local-password administrator")
+	}
+	groupIDs := map[string]bool{}
+	for i := range s.Groups {
+		v := &s.Groups[i]
+		if !resourceID.MatchString(v.ID) || groupIDs[v.ID] || !validName(v.Name) {
+			return fmt.Errorf("invalid or duplicate group %q", v.ID)
+		}
+		groupIDs[v.ID] = true
+		v.MemberIDs = uniqueGrants(v.MemberIDs)
+		v.SiteIDs = uniqueGrants(v.SiteIDs)
+		v.ServiceIDs = uniqueGrants(v.ServiceIDs)
+		for _, id := range v.MemberIDs {
+			if !users[id] {
+				return fmt.Errorf("unknown group member %q", id)
+			}
+		}
+		for _, id := range v.SiteIDs {
+			if !sites[id] {
+				return fmt.Errorf("unknown group site %q", id)
+			}
+		}
+		for _, id := range v.ServiceIDs {
+			if !services[id] {
+				return fmt.Errorf("unknown group application %q", id)
+			}
+		}
+	}
+	inviteIDs, inviteTokens := map[string]bool{}, map[string]bool{}
+	for i := range s.Invites {
+		v := &s.Invites[i]
+		hash, err := hex.DecodeString(v.TokenHash)
+		if !resourceID.MatchString(v.ID) || inviteIDs[v.ID] || inviteTokens[v.TokenHash] || !validName(v.Username) || names[v.Username] || err != nil || len(hash) != sha256.Size || v.CreatedAt.IsZero() || !v.ExpiresAt.After(v.CreatedAt) || v.ExpiresAt.Sub(v.CreatedAt) > 7*24*time.Hour {
+			return fmt.Errorf("invalid or duplicate invitation %q", v.ID)
+		}
+		inviteIDs[v.ID], inviteTokens[v.TokenHash], names[v.Username] = true, true, true
+		v.SiteIDs = uniqueGrants(v.SiteIDs)
+		v.ServiceIDs = uniqueGrants(v.ServiceIDs)
+		v.GroupIDs = uniqueGrants(v.GroupIDs)
+		for _, id := range v.SiteIDs {
+			if !sites[id] {
+				return fmt.Errorf("unknown invitation site %q", id)
+			}
+		}
+		for _, id := range v.ServiceIDs {
+			if !services[id] {
+				return fmt.Errorf("unknown invitation application %q", id)
+			}
+		}
+		for _, id := range v.GroupIDs {
+			if !groupIDs[id] {
+				return fmt.Errorf("unknown invitation group %q", id)
+			}
+		}
 	}
 	return nil
 }

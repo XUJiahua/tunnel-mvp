@@ -45,9 +45,10 @@ func openStore(dir, kind, username, password string) (*Store, error) {
 func (s *Store) snapshot() State                    { return s.Snapshot() }
 func (s *Store) update(fn func(*State) error) error { return s.Update(fn) }
 func (s *Store) user(id string) (User, bool) {
-	for _, u := range s.snapshot().Users {
+	st := s.snapshot()
+	for _, u := range st.Users {
 		if u.ID == id {
-			return u, true
+			return effectiveUser(st, u), true
 		}
 	}
 	return User{}, false

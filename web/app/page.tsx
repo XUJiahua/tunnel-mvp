@@ -9,6 +9,8 @@ import {
   useState,
 } from "react";
 
+import { GroupsPanel } from "./groups";
+import { InvitationLanding } from "./invitation";
 import { SessionsPanel } from "./sessions";
 import { api, APIError } from "./api";
 import { AuditPanel, Editor, Grants, ResourceEditor } from "./operations";
@@ -184,6 +186,7 @@ export default function Home() {
     issuer: "",
     oidcLogout: false,
   });
+  const [inviteToken, setInviteToken] = useState("");
   const [memberAuth, setMemberAuth] = useState("local");
   const [user, setUser] = useState<User | null>(null);
   const [booting, setBooting] = useState(true);
@@ -243,6 +246,20 @@ export default function Home() {
     setServices(b);
     setUsers(c);
     setConnected(true);
+  }, []);
+  useEffect(() => {
+    const read = () => {
+      const token = new URLSearchParams(window.location.hash.slice(1)).get(
+        "invite",
+      );
+      if (token) {
+        setInviteToken(token);
+        window.history.replaceState(null, "", "/");
+      }
+    };
+    read();
+    window.addEventListener("hashchange", read);
+    return () => window.removeEventListener("hashchange", read);
   }, []);
   useEffect(() => {
     api<typeof authOptions>("/auth/options")
@@ -437,6 +454,7 @@ export default function Home() {
     sites: ["站点", "连接你的数据面，建立安全的出站隧道。"],
     services: ["应用", "从这里进入已授权的内网服务。"],
     users: ["访问权限", "为成员分配整站或单独应用访问权限。"],
+    groups: ["用户组与邀请", "管理共享授权，并邀请成员自行设置密码。"],
     sessions: ["登录设备", "查看活跃会话，并撤销指定设备的访问。"],
     audit: ["审计日志", "查询访问、权限变更与健康状态变化。"],
   };
@@ -447,6 +465,19 @@ export default function Home() {
         <Logo />
         <p>正在连接控制面…</p>
       </div>
+    );
+  if (inviteToken)
+    return (
+      <InvitationLanding
+        token={inviteToken}
+        onCancel={() => setInviteToken("")}
+        onAccepted={async (member) => {
+          setUser(member);
+          setInviteToken("");
+          setTab("overview");
+          await refresh(member);
+        }}
+      />
     );
   if (!user)
     return (
@@ -715,6 +746,7 @@ export default function Home() {
             ...(admin
               ? [
                   ["users", "users", "访问权限"],
+                  ["groups", "users", "用户组与邀请"],
                   ["audit", "shield", "审计日志"],
                 ]
               : []),
@@ -981,6 +1013,9 @@ export default function Home() {
           )}
           {tab === "sessions" && (
             <SessionsPanel admin={admin} onExpired={sessionExpired} />
+          )}
+          {tab === "groups" && admin && (
+            <GroupsPanel members={users} sites={sites} services={services} />
           )}
           {tab === "audit" && admin && <AuditPanel />}
           {tab === "users" && (

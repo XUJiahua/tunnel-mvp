@@ -2,6 +2,7 @@ package state
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"path/filepath"
@@ -11,7 +12,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const SchemaVersion = 2
+const SchemaVersion = 3
 const applicationID = 0x54554e4c // TUNL
 
 type sqliteBackend struct{ db *sql.DB }
@@ -40,7 +41,11 @@ func connectSQLite(path string) (*sqliteBackend, error) {
 	return &sqliteBackend{db}, nil
 }
 
-var schema = []string{
+var schemaV3 = []string{
+	`CREATE TABLE groups (id TEXT PRIMARY KEY,position INTEGER NOT NULL UNIQUE,payload TEXT NOT NULL CHECK(json_valid(payload)))`,
+	`CREATE TABLE invites (id TEXT PRIMARY KEY,position INTEGER NOT NULL UNIQUE,payload TEXT NOT NULL CHECK(json_valid(payload)))`,
+}
+var schema = append([]string{
 	`CREATE TABLE users (id TEXT PRIMARY KEY, position INTEGER NOT NULL UNIQUE, username TEXT NOT NULL UNIQUE, password_hash TEXT NOT NULL, role TEXT NOT NULL CHECK(role IN ('admin','viewer')), disabled INTEGER NOT NULL DEFAULT 0 CHECK(disabled IN (0,1)), oidc_issuer TEXT NOT NULL DEFAULT '', oidc_subject TEXT NOT NULL DEFAULT '')`,
 	`CREATE TABLE sites (id TEXT PRIMARY KEY, position INTEGER NOT NULL UNIQUE, name TEXT NOT NULL, token_hash TEXT NOT NULL CHECK(length(token_hash)=64), created_at TEXT NOT NULL)`,
 	`CREATE TABLE services (id TEXT PRIMARY KEY, position INTEGER NOT NULL UNIQUE, name TEXT NOT NULL, site_id TEXT NOT NULL REFERENCES sites(id), url TEXT NOT NULL)`,
@@ -48,7 +53,7 @@ var schema = []string{
 	`CREATE TABLE user_services (user_id TEXT NOT NULL REFERENCES users(id), service_id TEXT NOT NULL REFERENCES services(id), position INTEGER NOT NULL, PRIMARY KEY(user_id,service_id), UNIQUE(user_id,position))`,
 	`CREATE INDEX services_site ON services(site_id)`,
 	`CREATE UNIQUE INDEX users_identity ON users(oidc_issuer,oidc_subject) WHERE oidc_issuer != ''`,
-}
+}, schemaV3...)
 
 func createSQLite(path string, s State) (*sqliteBackend, error) {
 	b, err := connectSQLite(path)
@@ -107,7 +112,7 @@ func openSQLite(path string) (backend, State, error) {
 	if err = b.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
 		return nil, State{}, err
 	}
-	if app != applicationID || (version != 1 && version != SchemaVersion) {
+	if app != applicationID || (version < 1 || version > SchemaVersion) {
 		return nil, State{}, fmt.Errorf("unsupported SQLite application/schema: app=%d version=%d (expected %d)", app, version, SchemaVersion)
 	}
 	var integrity string
@@ -130,22 +135,27 @@ func openSQLite(path string) (backend, State, error) {
 	if invalid {
 		return nil, State{}, fmt.Errorf("SQLite contains invalid foreign keys")
 	}
-	// The directory lock excludes other processes. Schema and domain validation
-	// must both succeed before committing this additive v1 -> v2 upgrade.
-	if version == 1 {
+	// Upgrade all known versions in one transaction, including domain validation.
+	if version < SchemaVersion {
 		tx, err := b.db.Begin()
 		if err != nil {
 			return nil, State{}, err
 		}
 		defer tx.Rollback()
-		for _, sql := range []string{
-			"ALTER TABLE users ADD COLUMN disabled INTEGER NOT NULL DEFAULT 0 CHECK(disabled IN (0,1))",
-			"ALTER TABLE users ADD COLUMN oidc_issuer TEXT NOT NULL DEFAULT ''",
-			"ALTER TABLE users ADD COLUMN oidc_subject TEXT NOT NULL DEFAULT ''",
-			"CREATE UNIQUE INDEX users_identity ON users(oidc_issuer,oidc_subject) WHERE oidc_issuer != ''",
-			"PRAGMA user_version=2",
-		} {
-			if _, err = tx.Exec(sql); err != nil {
+		statements := []string{}
+		if version < 2 {
+			statements = append(statements,
+				"ALTER TABLE users ADD COLUMN disabled INTEGER NOT NULL DEFAULT 0 CHECK(disabled IN (0,1))",
+				"ALTER TABLE users ADD COLUMN oidc_issuer TEXT NOT NULL DEFAULT ''",
+				"ALTER TABLE users ADD COLUMN oidc_subject TEXT NOT NULL DEFAULT ''",
+				"CREATE UNIQUE INDEX users_identity ON users(oidc_issuer,oidc_subject) WHERE oidc_issuer != ''")
+		}
+		if version < 3 {
+			statements = append(statements, schemaV3...)
+		}
+		statements = append(statements, fmt.Sprintf("PRAGMA user_version=%d", SchemaVersion))
+		for _, statement := range statements {
+			if _, err = tx.Exec(statement); err != nil {
 				return nil, State{}, err
 			}
 		}
@@ -180,7 +190,7 @@ func (b *sqliteBackend) save(s State) error {
 	// This version deliberately writes one validated aggregate per transaction.
 	// The in-memory read model stays fast; incremental SQL updates can be added
 	// behind Repository without changing control-plane authorization handlers.
-	for _, table := range []string{"user_services", "user_sites", "services", "sites", "users"} {
+	for _, table := range []string{"invites", "groups", "user_services", "user_sites", "services", "sites", "users"} {
 		if _, err = tx.Exec("DELETE FROM " + table); err != nil {
 			return err
 		}
@@ -214,6 +224,24 @@ func (b *sqliteBackend) save(s State) error {
 			if _, err = tx.Exec("INSERT INTO user_services VALUES(?,?,?)", v.ID, id, i); err != nil {
 				return err
 			}
+		}
+	}
+	for i, v := range s.Groups {
+		payload, err := json.Marshal(v)
+		if err != nil {
+			return err
+		}
+		if _, err = tx.Exec("INSERT INTO groups VALUES(?,?,?)", v.ID, i, string(payload)); err != nil {
+			return err
+		}
+	}
+	for i, v := range s.Invites {
+		payload, err := json.Marshal(v)
+		if err != nil {
+			return err
+		}
+		if _, err = tx.Exec("INSERT INTO invites VALUES(?,?,?)", v.ID, i, string(payload)); err != nil {
+			return err
 		}
 	}
 	return tx.Commit()
@@ -321,6 +349,39 @@ func loadSQLite(reader sqlReader) (State, error) {
 		}
 		err = rows.Err()
 		_ = rows.Close()
+		if err != nil {
+			return s, err
+		}
+	}
+	for _, table := range []string{"groups", "invites"} {
+		rows, err = reader.Query("SELECT id,payload FROM " + table + " ORDER BY position")
+		if err != nil {
+			return s, err
+		}
+		for rows.Next() {
+			var id, raw string
+			if err = rows.Scan(&id, &raw); err != nil {
+				rows.Close()
+				return s, err
+			}
+			if table == "groups" {
+				var v Group
+				if err = decodeStrict([]byte(raw), &v); err != nil || v.ID != id {
+					rows.Close()
+					return s, fmt.Errorf("invalid group payload")
+				}
+				s.Groups = append(s.Groups, v)
+			} else {
+				var v Invite
+				if err = decodeStrict([]byte(raw), &v); err != nil || v.ID != id {
+					rows.Close()
+					return s, fmt.Errorf("invalid invitation payload")
+				}
+				s.Invites = append(s.Invites, v)
+			}
+		}
+		err = rows.Err()
+		rows.Close()
 		if err != nil {
 			return s, err
 		}

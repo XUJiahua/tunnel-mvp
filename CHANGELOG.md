@@ -2,6 +2,9 @@
 
 ## 未发布
 
+- 用户组权限并集、实时组授权撤销，一次性成员邀请与自主设密。
+- SQLite schema v3 / backup v3；恢复历史备份清空 pending 邀请，防止已用链接重获效力。
+
 - 会话设备列表、成员/管理员逐会话撤销、离线管理员密码恢复。
 - OIDC back-channel/RP 退出、可选 acr/amr 策略；补真实 Keycloak + OTP + Agent HTTP/WS/SSE 双后端端到端验证与 CI。
 

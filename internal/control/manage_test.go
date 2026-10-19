@@ -161,7 +161,7 @@ func TestPasswordChangeAndReset(t *testing.T) {
 }
 
 func TestLiveWebSocketAndSSERevocation(t *testing.T) {
-	for _, action := range []string{"logout", "password", "grants", "delete", "target", "expiry", "disable", "identity", "session"} {
+	for _, action := range []string{"logout", "password", "grants", "delete", "target", "expiry", "disable", "identity", "session", "group"} {
 		t.Run(action, func(t *testing.T) {
 			f := setup(t)
 			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -191,6 +191,18 @@ func TestLiveWebSocketAndSSERevocation(t *testing.T) {
 			f.agent(t, site, token, portOf(upstream.URL))
 			svc := f.service(t, site, "app", upstream.URL)
 			u, login := f.member(t, nil, []string{svc.ID})
+			var group Group
+			if action == "group" {
+				res, data := f.request(t, "POST", "/api/groups", map[string]any{"name": "live group", "memberIDs": []string{u.ID}, "serviceIDs": []string{svc.ID}}, f.cookie, "")
+				if res.StatusCode != 201 {
+					t.Fatal(string(data))
+				}
+				group = mustJSON[Group](t, data)
+				res, _ = f.request(t, "PATCH", "/api/users/"+u.ID, map[string]any{"siteIDs": []string{}, "serviceIDs": []string{}}, f.cookie, "")
+				if res.StatusCode != 200 {
+					t.Fatal("remove direct grant")
+				}
+			}
 			access, host, _ := f.grant(t, svc, login)
 			if action == "expiry" {
 				f.s.auth.mu.Lock()
@@ -225,6 +237,8 @@ func TestLiveWebSocketAndSSERevocation(t *testing.T) {
 			reader.ReadString('\n')
 			var res *http.Response
 			switch action {
+			case "group":
+				res, _ = f.request(t, "PATCH", "/api/groups/"+group.ID, map[string]any{"name": "live group", "memberIDs": []string{u.ID}, "serviceIDs": []string{}}, f.cookie, "")
 			case "session":
 				_, data := f.request(t, "GET", "/api/me/sessions", nil, login, "")
 				sessions := mustJSON[[]sessionInfo](t, data)

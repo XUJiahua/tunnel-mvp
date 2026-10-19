@@ -141,11 +141,8 @@ func (s *Server) updateUser(w http.ResponseWriter, r *http.Request, actor User) 
 		fail(w, 400, err.Error())
 		return
 	}
-	// Keep the console session; close requests that lost their service grant.
-	s.cancelRequests(func(req liveRequest) bool {
-		svc, ok := s.store.service(req.serviceID)
-		return req.userID == out.ID && (!ok || !canAccessService(out, svc))
-	})
+	// Direct and group grants are additive; only close genuinely lost access.
+	s.cancelUnauthorizedRequests()
 	s.audit("user_grants_updated", actor.Username, "", out.ID)
 	jsonOut(w, 200, publicUser(out))
 }
