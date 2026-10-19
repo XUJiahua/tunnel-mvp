@@ -10,6 +10,7 @@
 
 - [操作手册](docs/operations.md)：升级、资源管理、权限、密码、ACL 重载、监控与备份。
 - [设计说明](docs/design/operations-and-access.md)：授权语义、会话撤销、连接池隔离和兼容性。
+- [存储设计](docs/design/storage.md)与[迁移/备份恢复手册](docs/storage-operations.md)：JSON / SQLite、目录锁与离线维护。
 - [实施路线图](docs/roadmap.md)：已交付能力与后续数据库、SSO、HA 等工作。
 
 ## 已实现
@@ -28,7 +29,8 @@
 - 退出、改密、删除、收回授权及会话到期主动关闭受影响的 WebSocket / SSE / HTTP 请求。
 - Agent `--watch-config` 校验后自动重载本地 ACL，通过重连撤销旧连接。
 - 按应用隔离的 HTTP 连接池、周期 HEAD 探测、状态快照、Prometheus 指标与告警配置示例。
-- JSON 状态文件持久化与 JSONL 审计日志、大小轮转及控制台查询；密码 bcrypt、Agent 令牌 SHA-256 存储。
+- JSON（默认）/ SQLite 状态存储、数据目录进程锁、离线迁移和带校验和的跨后端备份恢复。
+- JSONL 审计日志、大小轮转及控制台查询；密码 bcrypt、Agent 令牌 SHA-256 存储。
 - Docker 多阶段构建、Compose、GitHub Actions 构建与测试。
 
 ## 架构
@@ -58,7 +60,7 @@ flowchart TB
 | macOS | amd64 / arm64 | `tunnel_0.1.1_darwin_<架构>.tar.gz` |
 | Windows | amd64 / arm64 | `tunnel_0.1.1_windows_<架构>.zip` |
 
-压缩包包含二进制、README、更新说明与 `examples/`，前端已嵌入二进制。Linux / macOS 解压后运行 `./tunnel version`，Windows 运行 `.\tunnel.exe version`。Apple Silicon 选择 `darwin_arm64`，Intel Mac 选择 `darwin_amd64`。macOS 产物暂未签名和公证。
+压缩包包含二进制、README、更新说明与 `examples/`，前端已嵌入二进制；后续构建的压缩包也包含完整 docs 操作/设计手册。Linux / macOS 解压后运行 `./tunnel version`，Windows 运行 `.\tunnel.exe version`。Apple Silicon 选择 `darwin_arm64`，Intel Mac 选择 `darwin_amd64`。macOS 产物暂未签名和公证。
 
 下载同一 Release 中的 `checksums.txt`，验证压缩包：
 
@@ -133,6 +135,7 @@ export TUNNEL_AGENT_TOKEN
 | 监听地址 | `TUNNEL_LISTEN` | `--listen` |
 | 控制台地址 | `TUNNEL_PUBLIC_URL` | `--public-url` |
 | 应用域地址 | `TUNNEL_ACCESS_URL` | `--access-url` |
+| 状态后端 | `TUNNEL_STORAGE` | `--storage` |
 | 数据目录 | `TUNNEL_DATA_DIR` | `--data-dir` |
 | 自动探测间隔（秒） | `TUNNEL_PROBE_INTERVAL_SECONDS` | `--probe-interval` |
 | 审计文件大小（MiB） | `TUNNEL_AUDIT_MAX_MB` | `--audit-max-mb` |
@@ -254,14 +257,16 @@ Compose 默认只将 Go 的 8080 绑定到公网机器的回环地址，由宿�
 
 | 文件 | 内容 |
 | --- | --- |
-| `state.json` | 用户、bcrypt 密码散列、站点、Agent 令牌散列、应用与权限 |
+| `state.json` / `state.db` | JSON / SQLite 后端的用户、bcrypt 密码散列、站点、Agent 令牌散列、应用与权限 |
 | `audit.jsonl` | 登录、站点 / 应用 / 用户操作、Agent 连接、应用访问与探测事件 |
 
-状态使用互斥锁和临时文件落盘后原子替换，文件权限 0600、默认新建目录 0700。审计记录用户和资源 ID，不保存令牌、Cookie、请求体或查询参数。备份整个数据目录；审计默认每 20 MiB 轮转、保留 5 份，可配置；控制台提供当前文件尾部查询。完整历史可交给外部日志系统。
+默认 JSON 使用临时文件落盘后原子替换；可显式选择 SQLite，以事务与外键保存配置。新文件权限 0600、默认新建目录 0700。目录锁阻止两个新版本进程并发使用同一数据目录。审计记录用户和资源 ID，不保存令牌、Cookie、请求体或查询参数。备份整个数据目录；审计默认每 20 MiB 轮转、保留 5 份，可配置；控制台提供当前文件尾部查询。完整历史可交给外部日志系统。
+
+切换后端前先停止 Server，执行 `tunnel storage migrate --data-dir data`，再设置 `storage: sqlite`。`storage export/validate/restore` 支持两后端之间的可移植备份。迁移保留原 JSON，拒绝覆盖已有 SQLite；细节见存储手册。
 
 **MVP 明确范围：**
 
-- 单控制面进程、单数据目录；没有多实例共享存储、HA 或跨网关隧道路由。不要多进程同时打开同一数据目录。
+- 单控制面进程、单数据目录；没有多实例共享存储、HA 或跨网关隧道路由。新版本会拒绝第二个进程打开同一数据目录；不要使用多主机共享文件系统。SQLite 不提供控制面 HA。
 - 用户 / 访问会话与短期票据在内存中，重启 Server 后需重新登录；用户、站点、服务配置保留。
 - 授权在每个 HTTP 请求及 WebSocket Upgrade 时检查；退出、密码变更、授权收回或到期主动关闭受影响的请求。删除站点 / 轮换令牌会关闭整个站点隧道。
 - 已支持成员授权编辑、自助改密和管理员重置成员密码；尚无离线管理员密码恢复、用户组、多租户、自定义角色、OIDC、MFA。
@@ -274,7 +279,7 @@ Compose 默认只将 Go 的 8080 绑定到公网机器的回环地址，由宿�
 
 ```bash
 make build  # pnpm install --frozen-lockfile → Next.js 静态导出 → 复制到 embed 目录 → 编译 Go
-make test   # Go race / vet、TypeScript、发布标签保护检查
+make test   # Go race / vet、双后端控制面、TypeScript、发布标签保护检查
 
 # 可选浏览器验收（先完成 make build）
 cd web
@@ -291,7 +296,8 @@ Go 集成测试使用真正的 Agent、WebSocket 隧道与本地 HTTP / HTTPS �
 ```text
 cmd/tunnel/           server / agent 命令入口
 internal/agent/       ACL、DNS、远程 Dial 与自动重连
-internal/control/     HTTP API、认证授权、隧道、应用代理、持久化
+internal/control/     HTTP API、认证授权、隧道、应用代理
+internal/state/       Repository、JSON/SQLite、目录锁、迁移与备份恢复
 internal/config/      JSON 配置
 internal/web/         go:embed 前端资源
 web/                  Next.js App Router 控制台源码

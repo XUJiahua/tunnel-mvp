@@ -2,6 +2,11 @@
 
 ## 未发布
 
+- 新增 Repository 存储接口、可选纯 Go SQLite、schema/引用校验和数据目录独占进程锁。
+- 新增离线 `storage inspect/migrate/export/validate/restore`，保留 JSON 源文件，支持带校验和的跨后端恢复，拒绝覆盖和未知版本。
+- 真实控制面及浏览器验收覆盖 JSON/SQLite，CI 验证六个平台的无 CGO 编译，发布包包含完整设计和操作手册。
+
+
 - 直接编辑站点与应用，支持整站和单独应用授权以及成员权限修改。
 - 自助改密、管理员重置成员密码；退出、改密、授权撤销和到期关闭已有 HTTP / WebSocket / SSE 连接。
 - 应用隔离连接池，目标更新和 Agent 断线时淘汰旧池。

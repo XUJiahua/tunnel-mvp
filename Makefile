@@ -10,6 +10,7 @@ build: frontend
 test:
 	bash scripts/test-prepare-release.sh
 	$(GO) test -race ./...
+	TUNNEL_TEST_STORAGE=sqlite $(GO) test -race ./internal/control
 	$(GO) vet ./...
 	cd web && pnpm run typecheck
 clean:

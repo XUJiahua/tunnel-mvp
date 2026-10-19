@@ -6,6 +6,7 @@ services:
     environment:
       TUNNEL_ADMIN_PASSWORD: ${TUNNEL_ADMIN_PASSWORD:?Set a 12-72 byte bootstrap password}
       TUNNEL_METRICS_TOKEN: ${TUNNEL_METRICS_TOKEN:-}
+      TUNNEL_STORAGE: ${TUNNEL_STORAGE:-}
     volumes:
       - ./examples/server.production.json:/app/server.json:ro
       - tunnel-data:/var/lib/tunnel

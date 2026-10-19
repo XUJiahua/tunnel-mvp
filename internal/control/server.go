@@ -57,12 +57,13 @@ func New(c config.Server, password string) (*Server, error) {
 	if err := c.Validate(); err != nil {
 		return nil, err
 	}
-	st, err := OpenStore(c.DataDir, c.AdminUsername, password)
+	st, err := openStore(c.DataDir, c.Storage, c.AdminUsername, password)
 	if err != nil {
 		return nil, err
 	}
 	af, err := os.OpenFile(filepath.Join(c.DataDir, "audit.jsonl"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
 	if err != nil {
+		_ = st.Close()
 		return nil, err
 	}
 	p, _ := url.Parse(c.PublicURL)
@@ -77,6 +78,7 @@ func New(c config.Server, password string) (*Server, error) {
 	})
 	if len(s.metricsToken) > 0 && len(s.metricsToken) < 32 {
 		af.Close()
+		_ = st.Close()
 		return nil, fmt.Errorf("TUNNEL_METRICS_TOKEN must contain at least 32 bytes")
 	}
 	s.startBackground()
@@ -102,6 +104,9 @@ func (s *Server) Close() {
 	s.auditMu.Lock()
 	defer s.auditMu.Unlock()
 	s.auditFile.Close()
+	if err := s.store.Close(); err != nil {
+		slog.Error("state store close failed", "error", err)
+	}
 }
 func (s *Server) audit(event, user, site, resource string, fields ...map[string]any) {
 	s.auditMu.Lock()

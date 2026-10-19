@@ -96,6 +96,7 @@ func newRootCommand() *cobra.Command {
 	server.Flags().String("listen", ":8080", "HTTP listen address")
 	server.Flags().String("public-url", "http://localhost:8080", "Public console origin")
 	server.Flags().String("access-url", "http://apps.localhost:8080", "Application domain origin")
+	server.Flags().String("storage", "json", "State storage backend: json or sqlite")
 	server.Flags().String("data-dir", "data", "Persistent state and audit directory")
 	server.Flags().String("admin-username", "admin", "First-start administrator username")
 	server.Flags().Bool("check-config", false, "Validate and print effective configuration without starting")
@@ -148,6 +149,6 @@ func newRootCommand() *cobra.Command {
 	diagnose.Flags().StringVar(&target, "target", "", "HTTP/HTTPS origin to diagnose")
 	_ = diagnose.MarkFlagRequired("target")
 	agentCommand.AddCommand(diagnose)
-	root.AddCommand(server, agentCommand, &cobra.Command{Use: "version", Short: "Print build version", Args: cobra.NoArgs, Run: func(cmd *cobra.Command, _ []string) { fmt.Fprintln(cmd.OutOrStdout(), "tunnel "+build) }})
+	root.AddCommand(storageCommand(&path), server, agentCommand, &cobra.Command{Use: "version", Short: "Print build version", Args: cobra.NoArgs, Run: func(cmd *cobra.Command, _ []string) { fmt.Fprintln(cmd.OutOrStdout(), "tunnel "+build) }})
 	return root
 }

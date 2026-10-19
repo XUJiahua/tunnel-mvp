@@ -36,6 +36,7 @@ test.beforeAll(async () => {
     resolve(dir, "server.json"),
     JSON.stringify({
       listen: "127.0.0.1:18080",
+      storage: process.env.TUNNEL_TEST_STORAGE || "json",
       publicURL: consoleURL,
       accessURL: "http://apps.localhost:18080",
       dataDir: resolve(dir, "data"),
@@ -284,11 +285,9 @@ test("enroll site, open and log in to internal app, enforce viewer permissions",
     page.getByRole("cell", { name: "生产控制台", exact: true }),
   ).toBeVisible();
 
-  const updatedRow = page
-    .getByRole("row")
-    .filter({
-      has: page.getByRole("cell", { name: "生产控制台", exact: true }),
-    });
+  const updatedRow = page.getByRole("row").filter({
+    has: page.getByRole("cell", { name: "生产控制台", exact: true }),
+  });
   await expect(
     updatedRow.getByRole("button", { name: "检测连接", exact: true }),
   ).toBeVisible();

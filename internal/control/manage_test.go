@@ -99,10 +99,13 @@ func TestEditResourcesAndApplicationGrants(t *testing.T) {
 	if res.StatusCode != 400 {
 		t.Fatal("unknown grant accepted")
 	}
-	reopened, err := OpenStore(f.dir, "admin", "")
+	f.h.Close()
+	f.s.Close()
+	reopened, err := openStore(f.dir, f.s.cfg.Storage, "admin", "")
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer reopened.Close()
 	persisted, _ := reopened.service(svc.ID)
 	if persisted.URL != second.URL {
 		t.Fatal("resource edit not persisted")

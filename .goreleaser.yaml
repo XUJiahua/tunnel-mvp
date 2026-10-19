@@ -40,7 +40,7 @@ archives:
       - README.md
       - CHANGELOG.md
       - examples/**
-      - docs/console.png
+      - docs/**
 
 checksum:
   name_template: checksums.txt

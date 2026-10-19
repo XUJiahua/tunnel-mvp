@@ -1,0 +1,10 @@
+{
+  "listen": ":8080",
+  "publicURL": "http://localhost:8080",
+  "accessURL": "http://apps.localhost:8080",
+  "storage": "sqlite",
+  "dataDir": "data-sqlite",
+  "probeIntervalSeconds": 60,
+  "auditMaxMB": 20,
+  "auditBackups": 5
+}

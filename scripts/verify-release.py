@@ -36,7 +36,7 @@ def verify(directory: Path, version: str | None = None) -> None:
     if set(checksums) != {archive.name for archive in archives}:
         raise ValueError('Checksum manifest must contain exactly the six packages')
 
-    required = {'README.md', 'CHANGELOG.md', 'examples/server.json', 'examples/agent.json'}
+    required = {'README.md', 'CHANGELOG.md', 'examples/server.json', 'examples/agent.json', 'docs/operations.md', 'docs/design/storage.md', 'docs/storage-operations.md'}
     for archive in archives:
         with archive.open('rb') as source:
             actual = hashlib.file_digest(source, 'sha256').hexdigest()

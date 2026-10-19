@@ -54,6 +54,11 @@ jobs:
       - name: Verify browser-to-Agent access
         run: pnpm run test:e2e
         working-directory: web
+      - name: Verify browser access with SQLite
+        run: pnpm run test:e2e
+        working-directory: web
+        env:
+          TUNNEL_TEST_STORAGE: sqlite
       - name: Install GoReleaser
         uses: goreleaser/goreleaser-action@v7
         with:

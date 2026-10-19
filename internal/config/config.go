@@ -34,6 +34,7 @@ type Server struct {
 	Listen               string `json:"listen" mapstructure:"listen"`
 	PublicURL            string `json:"publicURL" mapstructure:"publicURL"`
 	AccessURL            string `json:"accessURL" mapstructure:"accessURL"`
+	Storage              string `json:"storage" mapstructure:"storage"`
 	DataDir              string `json:"dataDir" mapstructure:"dataDir"`
 	ProbeIntervalSeconds int    `json:"probeIntervalSeconds" mapstructure:"probeIntervalSeconds"`
 	AuditMaxMB           int    `json:"auditMaxMB" mapstructure:"auditMaxMB"`
@@ -68,6 +69,12 @@ func Origin(raw string) (*url.URL, error) {
 	return u, nil
 }
 func (s *Server) Validate() error {
+	if s.Storage == "" {
+		s.Storage = "json"
+	}
+	if s.Storage != "json" && s.Storage != "sqlite" {
+		return fmt.Errorf("storage must be json or sqlite")
+	}
 	if s.ProbeIntervalSeconds < 0 || (s.ProbeIntervalSeconds > 0 && s.ProbeIntervalSeconds < 10) || s.ProbeIntervalSeconds > 86400 {
 		return fmt.Errorf("probeIntervalSeconds must be 0 (disabled) or 10–86400")
 	}

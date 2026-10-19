@@ -27,6 +27,10 @@ jobs:
         working-directory: web
       - run: pnpm run test:e2e
         working-directory: web
+      - run: pnpm run test:e2e
+        working-directory: web
+        env:
+          TUNNEL_TEST_STORAGE: sqlite
       - name: Validate GoReleaser configuration
         uses: goreleaser/goreleaser-action@v7
         with:
@@ -36,3 +40,23 @@ jobs:
         with:
           name: tunnel-linux-amd64
           path: bin/tunnel
+
+  cross-build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        goos: [linux, darwin, windows]
+        goarch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.2'
+          cache: true
+      - name: Compile pure Go SQLite and platform file locks
+        env:
+          CGO_ENABLED: '0'
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: go build -trimpath -o "$RUNNER_TEMP/tunnel-cross-check" ./cmd/tunnel
