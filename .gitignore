@@ -1,0 +1,13 @@
+/bin/
+/data/
+/web/node_modules/
+/web/.next/
+/web/out/
+/internal/web/dist/*
+!/internal/web/dist/.gitkeep
+*.local.json
+.env
+playwright-report/
+*.tsbuildinfo
+web/test-results/
+web/playwright-report/
