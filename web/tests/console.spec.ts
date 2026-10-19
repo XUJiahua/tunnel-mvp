@@ -327,6 +327,9 @@ test("enroll site, open and log in to internal app, enforce viewer permissions",
     .click();
   await page.getByLabel("新密码", { exact: true }).fill(password);
   await page.getByRole("button", { name: "保存", exact: true }).click();
+  // A click does not await the async save. Wait for successful persistence and
+  // revocation before checking a different browser context's old session.
+  await expect(page.getByRole("dialog")).toHaveCount(0);
   await viewer.getByRole("button", { name: "刷新数据", exact: true }).click();
   await expect(
     viewer.getByRole("button", { name: "登录控制台", exact: true }),
