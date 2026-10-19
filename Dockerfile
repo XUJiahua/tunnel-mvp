@@ -1,9 +1,10 @@
 FROM node:24-alpine AS frontend
 WORKDIR /src/web
-COPY web/package*.json ./
-RUN npm ci --no-audit --no-fund
+RUN corepack enable
+COPY web/package.json web/pnpm-lock.yaml ./
+RUN pnpm install --frozen-lockfile
 COPY web/ ./
-RUN npm run build
+RUN pnpm run build
 
 FROM golang:1.27.2-alpine AS backend
 WORKDIR /src

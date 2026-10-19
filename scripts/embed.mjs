@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 const source = fileURLToPath(new URL("../web/out/", import.meta.url));
 const target = fileURLToPath(new URL("../internal/web/dist/", import.meta.url));
 if (!existsSync(source + "/index.html"))
-  throw new Error("Run npm run build in web first");
+  throw new Error("Run pnpm run build in web first");
 mkdirSync(target, { recursive: true });
 for (const entry of readdirSync(target))
   if (entry !== ".gitkeep")

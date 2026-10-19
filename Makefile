@@ -2,7 +2,7 @@ GO ?= go
 GORELEASER ?= goreleaser
 .PHONY: build frontend test clean release-check release-snapshot
 frontend:
-	cd web && npm ci --no-audit --no-fund && npm run build
+	cd web && pnpm install --frozen-lockfile && pnpm run build
 	node scripts/embed.mjs
 build: frontend
 	mkdir -p bin
@@ -11,7 +11,7 @@ test:
 	bash scripts/test-prepare-release.sh
 	$(GO) test -race ./...
 	$(GO) vet ./...
-	cd web && npm run typecheck
+	cd web && pnpm run typecheck
 clean:
 	rm -rf bin web/.next web/out internal/web/dist
 	mkdir -p internal/web/dist

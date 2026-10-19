@@ -65,7 +65,7 @@ Windows 可用 `Get-FileHash .\tunnel_0.1.0_windows_amd64.zip -Algorithm SHA256`
 
 ## 本地启动
 
-构建需要 Go **1.27+**、Node.js **24+** 和 npm。运行产物只需要操作系统的 CA / DNS 环境。
+构建需要 Go **1.27+**、Node.js **24+** 和 pnpm **12.14.0**（版本固定在 `web/package.json`）。可通过 `corepack enable` 启用 pnpm。运行产物只需要操作系统的 CA / DNS 环境。
 
 ```bash
 git clone https://github.com/XUJiahua/tunnel-mvp.git
@@ -260,13 +260,13 @@ Compose 默认只将 Go 的 8080 绑定到公网机器的回环地址，由宿�
 ## 开发与验证
 
 ```bash
-make build  # npm ci → Next.js 静态导出 → 复制到 embed 目录 → 编译 Go
+make build  # pnpm install --frozen-lockfile → Next.js 静态导出 → 复制到 embed 目录 → 编译 Go
 make test   # Go race / vet、TypeScript、发布标签保护检查
 
 # 可选浏览器验收（先完成 make build）
 cd web
-npx playwright install --with-deps chromium
-npm run test:e2e
+pnpm exec playwright install --with-deps chromium
+pnpm run test:e2e
 ```
 
 Playwright 还覆盖控制台登录、站点注册、真实 Agent 上线、应用探测、从应用子域名登录上游、成员权限和移动端布局。GitHub Actions 会执行这条浏览器验收流程。
