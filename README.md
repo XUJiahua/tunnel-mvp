@@ -14,7 +14,8 @@
 - 每应用独立子域名、30 秒一次性登录票据、1 小时访问会话。
 - 真实反向隧道、HTTP 请求与上传、WebSocket、SSE / 流式响应。
 - 同源 `Location` 重写、Cookie Domain 清理、网关 Cookie 隔离、上游 Origin 与 Forwarded 头处理。
-- 实际经 Agent 执行的 HTTP HEAD 探测，区分“Agent 在线”和“应用可达”。
+- 实际经 Agent 执行的 HTTP HEAD 探测，区分“Agent 在线”和“应用可达”；失败详情含 DNS / ACL / TCP / TLS / HTTP 原因与请求 ID。
+- Cobra CLI + Viper 配置文件 / 环境变量 / 参数覆盖，独立 Agent 诊断命令与 text / JSON 日志。
 - Agent 侧 CIDR + 端口 + 可选精确主机名白名单；内网 DNS 解析后校验 IP，并直接连接该 IP。
 - HTTPS Origin 证书与 SNI 校验，系统 CA 信任；不提供跳过证书校验的开关。
 - JSON 状态文件持久化与 JSONL 审计日志；密码 bcrypt、Agent 令牌 SHA-256 存储。
@@ -75,7 +76,7 @@ make build
 # 后续启动读取 data/state.json，不会用此变量重置已有密码。
 read -rs TUNNEL_ADMIN_PASSWORD
 export TUNNEL_ADMIN_PASSWORD
-./bin/tunnel server -config examples/server.json
+./bin/tunnel server --config examples/server.json
 ```
 
 打开 <http://localhost:8080>，使用 `admin` 和刚设置的密码登录。
@@ -88,7 +89,7 @@ export TUNNEL_ADMIN_PASSWORD
 ```bash
 read -rs TUNNEL_AGENT_TOKEN
 export TUNNEL_AGENT_TOKEN
-./bin/tunnel agent -config agent.local.json
+./bin/tunnel agent --config agent.local.json
 ```
 
 5. 在控制台添加应用，选择刚创建的站点，目标填 `http://127.0.0.1:3000`。
@@ -97,6 +98,73 @@ export TUNNEL_AGENT_TOKEN
 现代 Chromium 浏览器会将 `*.localhost` 解析到回环地址。若你的浏览器 / 操作系统不支持，请在 hosts 文件中添加具体的 `<应用ID>.apps.localhost`，或使用自己配置的通配 DNS。`curl` 可用 `--resolve '<应用ID>.apps.localhost:8080:127.0.0.1'` 指定解析。
 
 本地 HTTP 仅用于开发；Agent 仅允许通过 HTTP 连接 `localhost`、`127.0.0.1`、`::1`，其他控制面地址必须使用 HTTPS。
+
+## CLI 与配置
+
+命令使用 [Cobra](https://github.com/spf13/cobra)，配置使用 Viper。支持 JSON / YAML，覆盖顺序为：**显式命令行参数 > 环境变量 > 配置文件 > 默认值**。旧的 `-config` 继续兼容，新命令统一使用 `--config` / `-c`。
+
+```bash
+./bin/tunnel --help
+./bin/tunnel server --help
+./bin/tunnel agent diagnose --help
+./bin/tunnel server -c examples/server.json --check-config
+./bin/tunnel agent -c agent.local.json --check-config
+
+# 覆盖监听地址，启用结构化调试日志
+./bin/tunnel server -c examples/server.json --listen 127.0.0.1:8080 --log-level debug --log-format json
+./bin/tunnel agent -c agent.local.json --log-level debug --log-format json
+```
+
+`--check-config` 只校验并显示生效配置，不启动进程，不显示密码或令牌。`tunnel completion bash|zsh|fish|powershell` 生成补全脚本。
+
+| 配置 | 环境变量 | 参数 |
+| --- | --- | --- |
+| 配置文件 | `TUNNEL_CONFIG` | `--config` / `-c` |
+| 监听地址 | `TUNNEL_LISTEN` | `--listen` |
+| 控制台地址 | `TUNNEL_PUBLIC_URL` | `--public-url` |
+| 应用域地址 | `TUNNEL_ACCESS_URL` | `--access-url` |
+| 数据目录 | `TUNNEL_DATA_DIR` | `--data-dir` |
+| 初始管理员名称 | `TUNNEL_ADMIN_USERNAME` | `--admin-username` |
+| Agent 连接地址 | `TUNNEL_SERVER_URL` | `--server-url` |
+| Agent 站点 | `TUNNEL_SITE_ID` | `--site-id` |
+| Agent 白名单 | `TUNNEL_ALLOW`（JSON 数组） | `--allow`（JSON 数组，整组替换） |
+| 日志级别 | `TUNNEL_LOG_LEVEL` | `--log-level` |
+| 日志格式 | `TUNNEL_LOG_FORMAT` | `--log-format` |
+
+配置文件也可以设置 `logLevel: debug`、`logFormat: json`。密码与 Agent 令牌仍仅从 `TUNNEL_ADMIN_PASSWORD` / `TUNNEL_AGENT_TOKEN` 读取。
+
+## 连接失败怎么定位
+
+即使 Server、Agent 和应用都在同一机器上，目标也必须匹配 Agent 的**网段与端口**白名单。站点在线仅表示控制连接成功。
+
+1. 点击应用的“检测连接”。失败会自动打开“连接诊断”，显示原因、阶段、原始错误、目标、DNS 解析 IP、每个 IP 的白名单判断与拨号结果，以及 Server / Agent 请求 ID。也可以点击“诊断详情”重新查看或复制结果。
+2. 在 Agent 所在机器执行独立诊断，不需要连接控制面或提供 Agent 令牌：
+
+   ```bash
+   ./bin/tunnel agent diagnose -c agent.local.json --target http://127.0.0.1:3000
+   ```
+
+   成功输出 HTTP 状态，失败输出完整 JSON 诊断并返回非零退出码。该命令验证本机 DNS、ACL、TCP、HTTP/TLS；若本机通过而网关 TLS 失败，还需检查 Server 的 CA 信任。
+3. 使用 `--log-level debug --log-format json` 启动两端，按 `request_id` / `agent_request_id` 查询日志。Agent 在默认 info 级别也会输出目标连接成功或失败；Server 会输出探测和代理错误。`audit.jsonl` 保存探测结果和请求 ID，不保存密码、令牌、Cookie、请求体或查询参数。
+
+| 原因码 | 重点检查 |
+| --- | --- |
+| `site_offline` | Agent 的 Server 地址、siteID、令牌和重连日志 |
+| `acl_denied` | 目标端口是否在 `allow.ports`；解析出的 IP 是否匹配 CIDR / host |
+| `dns_failed` | Agent 所在网络的 DNS 配置 |
+| `connection_refused` | 应用是否运行，监听 IP 与端口是否正确 |
+| `network_unreachable` | 路由、防火墙、容器网络 |
+| `tls_failed` | HTTP/HTTPS、证书主机名、Server 的系统 CA |
+| `timeout` | 网络丢包、连接超时、应用未返回响应 |
+| `http_failed` | 是否访问了 SSH 等非 HTTP 端口，或应用提前关闭连接 |
+
+本地常见情况：
+
+- 应用运行在 `8081`，但复制的 Agent 配置只允许 `3000`：把 `8081` 加入相应规则并重启 Agent。
+- `localhost` 解析到 `::1`，应用只监听 IPv6，而白名单只允许 `127.0.0.0/8`：按实际需要显式添加 `{"cidr":"::1/128","ports":[3000]}`，或将目标与监听地址统一为 `127.0.0.1`。
+- Agent 在 Docker 中而应用在宿主机：Agent 的 `localhost` 是容器自身；改用实际可达的宿主机地址，并配置相应白名单。
+
+完整 Agent 诊断通过带站点令牌的 HTTPS/HTTP 请求上报控制面；隧道错误只携带 100 字节以内的原因码和 Agent 请求 ID，以适配 remotedialer 的限制。控制面缓存有五分钟 TTL 和 1024 条上限，并按站点隔离。上报失败或混用旧版本时会退回简短错误和日志提示，不改变隧道协议；更新 Server 和 Agent 才能获得完整诊断。
 
 ## Agent 白名单
 

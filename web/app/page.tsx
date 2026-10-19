@@ -22,6 +22,16 @@ type Probe = {
   status?: number;
   latencyMs?: number;
   message?: string;
+  code?: string;
+  stage?: string;
+  hint?: string;
+  requestID?: string;
+  agentRequestID?: string;
+  siteID?: string;
+  target?: string;
+  checkedAt?: string;
+  resolvedIPs?: string[];
+  attempts?: { ip: string; allowed: boolean; error?: string }[];
 };
 type Dialog = "site" | "service" | "user" | null;
 type Enrollment = { id: string; name: string; token: string };
@@ -200,6 +210,10 @@ export default function Home() {
   const [search, setSearch] = useState("");
   const [siteFilter, setSiteFilter] = useState("");
   const [probes, setProbes] = useState<Record<string, Probe>>({});
+  const [diagnostic, setDiagnostic] = useState<{
+    service: Service;
+    result: Probe;
+  } | null>(null);
   const [probing, setProbing] = useState("");
   const [opening, setOpening] = useState("");
   const admin = user?.role === "admin";
@@ -358,6 +372,11 @@ export default function Home() {
     try {
       const res = await api<Probe>(`/services/${service.id}/probe`, "POST");
       setProbes((p) => ({ ...p, [service.id]: res }));
+      if (!res.reachable) setDiagnostic({ service, result: res });
+      else {
+        setDiagnostic(null);
+        setNotice(`检测成功 · HTTP ${res.status}`);
+      }
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -577,9 +596,17 @@ export default function Home() {
                       : p
                         ? p.reachable
                           ? `HTTP ${p.status} · ${p.latencyMs}ms`
-                          : "不可达 · 重试"
+                          : `${diagnosisLabel(p.code)} · 重试`
                         : "检测连接"}
                   </button>
+                  {p && !p.reachable && (
+                    <button
+                      className="diagnostic-link"
+                      onClick={() => setDiagnostic({ service, result: p })}
+                    >
+                      诊断详情
+                    </button>
+                  )}
                 </td>
                 <td className="right">
                   <div className="row-actions">
@@ -921,6 +948,103 @@ export default function Home() {
           </footer>
         </main>
       </div>
+      {diagnostic && (
+        <Modal
+          title={`连接诊断 · ${diagnostic.service.name}`}
+          onClose={() => setDiagnostic(null)}
+        >
+          <div className="diagnostic-status">
+            {diagnosisLabel(diagnostic.result.code)}{" "}
+            <code>{diagnostic.result.code || "unknown"}</code>
+          </div>
+          <p className="diagnostic-message" role="alert">
+            {diagnostic.result.message || "未收到有效的 HTTP 响应。"}
+          </p>
+          <p className="form-tip">
+            {diagnostic.result.hint ||
+              "请查看 Server 与 Agent 日志中的目标地址及错误信息。"}
+          </p>
+          <dl className="diagnostic-fields">
+            <dt>失败阶段</dt>
+            <dd>{diagnostic.result.stage || "未知"}</dd>
+            <dt>目标地址</dt>
+            <dd>
+              <code>{diagnostic.result.target || diagnostic.service.url}</code>
+            </dd>
+            <dt>站点 ID</dt>
+            <dd>
+              <code>
+                {diagnostic.result.siteID || diagnostic.service.siteID}
+              </code>
+            </dd>
+            <dt>耗时</dt>
+            <dd>{diagnostic.result.latencyMs ?? "—"} ms</dd>
+            {diagnostic.result.checkedAt && (
+              <>
+                <dt>探测时间</dt>
+                <dd>
+                  {new Date(diagnostic.result.checkedAt).toLocaleString()}
+                </dd>
+              </>
+            )}
+            {diagnostic.result.requestID && (
+              <>
+                <dt>Server 请求 ID</dt>
+                <dd>
+                  <code>{diagnostic.result.requestID}</code>
+                </dd>
+              </>
+            )}
+            {diagnostic.result.agentRequestID && (
+              <>
+                <dt>Agent 请求 ID</dt>
+                <dd>
+                  <code>{diagnostic.result.agentRequestID}</code>
+                </dd>
+              </>
+            )}
+            {!!diagnostic.result.resolvedIPs?.length && (
+              <>
+                <dt>解析到的 IP</dt>
+                <dd>
+                  <code>{diagnostic.result.resolvedIPs.join(", ")}</code>
+                </dd>
+              </>
+            )}
+          </dl>
+          {!!diagnostic.result.attempts?.length && (
+            <div className="diagnostic-attempts">
+              <h3>Agent 连接尝试</h3>
+              {diagnostic.result.attempts.map((attempt, index) => (
+                <div key={`${attempt.ip}-${index}`}>
+                  <code>{attempt.ip}</code>
+                  <span>{attempt.allowed ? "白名单允许" : "白名单拒绝"}</span>
+                  {attempt.error && <p>{attempt.error}</p>}
+                </div>
+              ))}
+            </div>
+          )}
+          <p className="muted small">
+            按请求 ID 检索两端日志。Agent 在容器中时，localhost / 127.0.0.1
+            指向该容器自身。
+          </p>
+          <div className="modal-actions">
+            <button
+              className="secondary"
+              onClick={() => copy(JSON.stringify(diagnostic.result, null, 2))}
+            >
+              复制诊断信息
+            </button>
+            <button
+              className="primary"
+              disabled={probing === diagnostic.service.id}
+              onClick={() => probe(diagnostic.service)}
+            >
+              {probing === diagnostic.service.id ? "探测中…" : "重试"}
+            </button>
+          </div>
+        </Modal>
+      )}
       {dialog && (
         <Modal
           title={
@@ -1074,14 +1198,17 @@ export default function Home() {
               {
                 serverURL: window.location.origin,
                 siteID: enrollment.id,
-                allow: [{ cidr: "127.0.0.0/8", ports: [3000] }],
+                allow: [
+                  { cidr: "127.0.0.0/8", ports: [3000] },
+                  { cidr: "::1/128", ports: [3000] },
+                ],
               },
               null,
               2,
             )}
           </pre>
           <h3 className="config-label">2. 在内网机器运行</h3>
-          <pre>{`read -rs TUNNEL_AGENT_TOKEN\nexport TUNNEL_AGENT_TOKEN\n./tunnel agent -config agent.local.json`}</pre>
+          <pre>{`read -rs TUNNEL_AGENT_TOKEN\nexport TUNNEL_AGENT_TOKEN\n./tunnel agent --config agent.local.json`}</pre>
           <p className="muted small">
             粘贴令牌后回车。非本机连接需使用 HTTPS；私有 CA
             可通过系统信任库配置。
@@ -1117,4 +1244,19 @@ function Empty({
       {action}
     </div>
   );
+}
+
+function diagnosisLabel(code?: string) {
+  const labels: Record<string, string> = {
+    acl_denied: "白名单拒绝",
+    dns_failed: "DNS 解析失败",
+    connection_refused: "连接被拒绝",
+    network_unreachable: "网络不可达",
+    tls_failed: "TLS 校验失败",
+    timeout: "连接或响应超时",
+    site_offline: "站点离线",
+    invalid_target: "目标配置错误",
+    http_failed: "HTTP 请求失败",
+  };
+  return labels[code || ""] || "不可达";
 }

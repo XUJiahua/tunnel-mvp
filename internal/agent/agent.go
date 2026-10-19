@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/XUJiahua/tunnel-mvp/internal/config"
+	"github.com/XUJiahua/tunnel-mvp/internal/diagnostics"
 	"github.com/gorilla/websocket"
 	"github.com/rancher/remotedialer"
 )
@@ -26,6 +27,8 @@ type rule struct {
 type Policy struct {
 	rules    []rule
 	resolver *net.Resolver
+	siteID   string
+	report   func(*diagnostics.Failure)
 }
 
 func NewPolicy(rules []config.Rule) (*Policy, error) {
@@ -64,33 +67,72 @@ func (p *Policy) allowed(host, port string, ip netip.Addr) bool {
 	}
 	return false
 }
-func (p *Policy) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+func (p *Policy) DialContext(ctx context.Context, network, address string) (conn net.Conn, err error) {
+	start := time.Now()
+	id := diagnostics.ID()
+	failure := func(code, stage, message string) *diagnostics.Failure {
+		f := diagnostics.New(code, stage, message)
+		f.AgentRequestID = id
+		f.Target = address
+		return f
+	}
+	defer func() {
+		if err != nil {
+			d := diagnostics.Describe(err)
+			slog.Warn("agent target connection failed", "site_id", p.siteID, "agent_request_id", id, "target", address, "code", d.Code, "stage", d.Stage, "resolved_ips", d.ResolvedIPs, "attempts", d.Attempts, "error", d.Message, "hint", d.Hint, "latency_ms", time.Since(start).Milliseconds())
+			if p.report != nil {
+				p.report(d)
+			}
+		}
+	}()
 	if network != "tcp" && network != "tcp4" && network != "tcp6" {
-		return nil, errors.New("only TCP allowed")
+		return nil, failure("invalid_target", "configuration", "only TCP connections are allowed")
 	}
 	host, port, err := net.SplitHostPort(address)
 	if err != nil {
-		return nil, err
+		return nil, failure("invalid_target", "configuration", err.Error())
 	}
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	ips, err := p.resolver.LookupNetIP(ctx, "ip", host)
 	if err != nil {
-		return nil, err
+		return nil, failure("dns_failed", "dns", err.Error())
 	}
-	// Resolve in the site and pin the checked IP in the actual dial: no second DNS lookup.
-	var last error = errors.New("target denied by agent ACL")
+	resolved := []string{}
+	for i, ip := range ips {
+		ips[i] = ip.Unmap()
+		resolved = append(resolved, ips[i].String())
+	}
+	slog.Debug("agent target DNS resolved", "site_id", p.siteID, "agent_request_id", id, "target", address, "resolved_ips", resolved)
+	attempts := []diagnostics.Attempt{}
+	var last error
 	for _, ip := range ips {
-		if !p.allowed(host, port, ip) {
+		allowed := p.allowed(host, port, ip)
+		attempt := diagnostics.Attempt{IP: ip.String(), Allowed: allowed}
+		if !allowed {
+			attempt.Error = "denied by Agent CIDR/host/port ACL"
+			attempts = append(attempts, attempt)
 			continue
 		}
-		c, e := (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
+		conn, e := (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
 		if e == nil {
-			return c, nil
+			slog.Info("agent target connected", "site_id", p.siteID, "agent_request_id", id, "target", address, "ip", ip.String(), "latency_ms", time.Since(start).Milliseconds())
+			return conn, nil
 		}
+		attempt.Error = e.Error()
+		attempts = append(attempts, attempt)
 		last = e
 	}
-	return nil, last
+	d := failure("acl_denied", "acl", "none of the resolved target IPs matched the Agent CIDR/host/port allow list")
+	if last != nil {
+		d = diagnostics.Describe(last)
+		d.Stage = "tcp"
+		d.AgentRequestID = id
+		d.Target = address
+	}
+	d.ResolvedIPs = resolved
+	d.Attempts = attempts
+	return nil, d
 }
 func Run(ctx context.Context, c config.Agent, token string) error {
 	if len(token) < 32 {
@@ -99,10 +141,18 @@ func Run(ctx context.Context, c config.Agent, token string) error {
 	if c.SiteID == "" {
 		return errors.New("siteID required")
 	}
+	if err := c.Validate(); err != nil {
+		return err
+	}
 	p, err := NewPolicy(c.Allow)
 	if err != nil {
 		return err
 	}
+	p.siteID = c.SiteID
+	report, closeReporter := newReporter(ctx, c, token)
+	defer closeReporter()
+	p.report = report
+	slog.Info("agent configuration loaded", "site_id", c.SiteID, "server", c.ServerURL, "allow", c.Allow)
 	u, err := config.Origin(c.ServerURL)
 	if err != nil {
 		return err

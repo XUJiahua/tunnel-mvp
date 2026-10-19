@@ -2,16 +2,19 @@ package main
 
 import (
 	"context"
-	"flag"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/XUJiahua/tunnel-mvp/internal/agent"
 	"github.com/XUJiahua/tunnel-mvp/internal/config"
 	"github.com/XUJiahua/tunnel-mvp/internal/control"
+	"github.com/sirupsen/logrus"
+	"github.com/spf13/cobra"
 )
 
 var (
@@ -21,51 +24,119 @@ var (
 )
 
 func main() {
-	if err := run(); err != nil {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	cmd := newRootCommand()
+	cmd.SetArgs(legacyArgs(os.Args[1:]))
+	if err := cmd.ExecuteContext(ctx); err != nil {
 		slog.Error("tunnel stopped", "error", err)
 		os.Exit(1)
 	}
 }
-func run() error {
-	if len(os.Args) < 2 {
-		return fmt.Errorf("usage: tunnel <server|agent> -config config.json; tunnel version")
+func legacyArgs(args []string) []string {
+	out := append([]string{}, args...)
+	for i, a := range out {
+		if a == "--" {
+			break
+		}
+		if a == "-config" {
+			out[i] = "--config"
+		} else if strings.HasPrefix(a, "-config=") {
+			out[i] = "-" + a
+		}
 	}
-	if os.Args[1] == "version" || os.Args[1] == "--version" {
-		fmt.Printf("tunnel %s (commit: %s, built: %s)\n", version, commit, date)
-		return nil
+	return out
+}
+func output(cmd *cobra.Command, v any) error {
+	enc := json.NewEncoder(cmd.OutOrStdout())
+	enc.SetIndent("", "  ")
+	return enc.Encode(v)
+}
+func logging(c config.Logging) {
+	levels := map[string]slog.Level{"debug": slog.LevelDebug, "info": slog.LevelInfo, "warn": slog.LevelWarn, "error": slog.LevelError}
+	options := &slog.HandlerOptions{Level: levels[c.LogLevel]}
+	if c.LogFormat == "json" {
+		slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, options)))
+		logrus.SetFormatter(&logrus.JSONFormatter{})
+	} else {
+		slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, options)))
+		logrus.SetFormatter(&logrus.TextFormatter{FullTimestamp: true})
 	}
-	f := flag.NewFlagSet(os.Args[1], flag.ContinueOnError)
-	path := f.String("config", "", "JSON configuration file")
-	if err := f.Parse(os.Args[2:]); err != nil {
-		return err
-	}
-	if *path == "" {
-		return fmt.Errorf("-config required")
-	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-	switch os.Args[1] {
-	case "server":
-		var c config.Server
-		if err := config.Load(*path, &c); err != nil {
+	level, _ := logrus.ParseLevel(c.LogLevel)
+	logrus.SetLevel(level)
+}
+func newRootCommand() *cobra.Command {
+	var path, level, format string
+	build := fmt.Sprintf("%s (commit: %s, built: %s)", version, commit, date)
+	root := &cobra.Command{Use: "tunnel", Short: "Access private web applications through outbound site tunnels", Version: build, SilenceUsage: true, SilenceErrors: true}
+	root.SetVersionTemplate("tunnel {{.Version}}\n")
+	root.PersistentFlags().StringVarP(&path, "config", "c", "", "JSON/YAML config file (or TUNNEL_CONFIG)")
+	root.PersistentFlags().StringVar(&level, "log-level", "info", "Log level: debug, info, warn, error (or TUNNEL_LOG_LEVEL)")
+	root.PersistentFlags().StringVar(&format, "log-format", "text", "Log format: text, json (or TUNNEL_LOG_FORMAT)")
+	server := &cobra.Command{Use: "server", Short: "Run the public control plane and access gateway", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+		c, err := config.ServerFrom(path, cmd.Flags())
+		if err != nil {
 			return err
 		}
-		if err := c.Validate(); err != nil {
-			return err
+		logging(c.Logging)
+		check, _ := cmd.Flags().GetBool("check-config")
+		if check {
+			return output(cmd, c)
 		}
 		s, err := control.New(c, os.Getenv("TUNNEL_ADMIN_PASSWORD"))
 		if err != nil {
 			return err
 		}
 		defer s.Close()
-		return s.Run(ctx)
-	case "agent":
-		var c config.Agent
-		if err := config.Load(*path, &c); err != nil {
+		return s.Run(cmd.Context())
+	}}
+	server.Flags().String("listen", ":8080", "HTTP listen address")
+	server.Flags().String("public-url", "http://localhost:8080", "Public console origin")
+	server.Flags().String("access-url", "http://apps.localhost:8080", "Application domain origin")
+	server.Flags().String("data-dir", "data", "Persistent state and audit directory")
+	server.Flags().String("admin-username", "admin", "First-start administrator username")
+	server.Flags().Bool("check-config", false, "Validate and print effective configuration without starting")
+	agentCommand := &cobra.Command{Use: "agent", Short: "Connect an internal site to the public control plane", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+		c, err := config.AgentFrom(path, cmd.Flags())
+		if err != nil {
 			return err
 		}
-		return agent.Run(ctx, c, os.Getenv("TUNNEL_AGENT_TOKEN"))
-	default:
-		return fmt.Errorf("unknown command: %s", os.Args[1])
-	}
+		logging(c.Logging)
+		if _, err = agent.NewPolicy(c.Allow); err != nil {
+			return err
+		}
+		check, _ := cmd.Flags().GetBool("check-config")
+		if check {
+			return output(cmd, c)
+		}
+		return agent.Run(cmd.Context(), c, os.Getenv("TUNNEL_AGENT_TOKEN"))
+	}}
+	agentCommand.PersistentFlags().String("server-url", "http://localhost:8080", "Public control plane origin")
+	agentCommand.PersistentFlags().String("site-id", "", "Registered site ID")
+	agentCommand.PersistentFlags().String("allow", "", "Agent ACL rules as a JSON array (or TUNNEL_ALLOW)")
+	agentCommand.Flags().Bool("check-config", false, "Validate and print effective configuration without starting")
+	var target string
+	diagnose := &cobra.Command{Use: "diagnose", Short: "Test a target using local Agent DNS/ACL/TCP/HTTP (no token needed)", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+		c, err := config.AgentFrom(path, cmd.Flags())
+		if err != nil {
+			return err
+		}
+		logging(c.Logging)
+		result, err := agent.Diagnose(cmd.Context(), c, target)
+		if err != nil {
+			return err
+		}
+		if err = output(cmd, result); err != nil {
+			return err
+		}
+		if !result.Reachable {
+			return fmt.Errorf("%s: %s", result.Failure.Code, result.Failure.Message)
+		}
+		return nil
+	}}
+	diagnose.Flags().StringVar(&target, "target", "", "HTTP/HTTPS origin to diagnose")
+	_ = diagnose.MarkFlagRequired("target")
+	agentCommand.AddCommand(diagnose)
+	root.AddCommand(server, agentCommand, &cobra.Command{Use: "version", Short: "Print build version", Args: cobra.NoArgs, Run: func(cmd *cobra.Command, _ []string) { fmt.Fprintln(cmd.OutOrStdout(), "tunnel "+build) }})
+	return root
 }

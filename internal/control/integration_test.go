@@ -5,8 +5,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"github.com/XUJiahua/tunnel-mvp/internal/diagnostics"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +18,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -412,5 +416,121 @@ func TestCSRFTrustAndPersistence(t *testing.T) {
 	resp, _ = f.request(t, "GET", "/", nil, access, host)
 	if resp.StatusCode != 502 {
 		t.Fatal("untrusted origin certificate accepted")
+	}
+}
+
+func TestLocalProbeDiagnosticsSurviveTunnel(t *testing.T) {
+	var logs lockedBuffer
+	original := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(original) })
+	f := setup(t)
+	app := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(204) }))
+	defer app.Close()
+	tlsApp := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(204) }))
+	defer tlsApp.Close()
+	deniedApp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(204) }))
+	defer deniedApp.Close()
+	l, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	closedURL := "http://" + l.Addr().String()
+	_ = l.Close()
+	site, token := f.site(t, "Local diagnostic site")
+	f.agent(t, site, token, portOf(app.URL), portOf(tlsApp.URL), portOf(closedURL))
+	// A live server, Agent and application on one machine still need the correct ACL.
+	for _, tc := range []struct{ name, target, code, stage string }{
+		{"healthy", app.URL, "", ""},
+		{"ACL", deniedApp.URL, "acl_denied", "acl"},
+		{"refused", closedURL, "connection_refused", "tcp"},
+		{"TLS", tlsApp.URL, "tls_failed", "tls"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := f.service(t, site, tc.name, tc.target)
+			res, body := f.request(t, "POST", "/api/services/"+svc.ID+"/probe", nil, f.cookie, "")
+			report := mustJSON[probeReport](t, body)
+			if report.RequestID == "" || report.RequestID != res.Header.Get("X-Tunnel-Request-ID") || report.Target != tc.target || report.SiteID != site.ID {
+				t.Fatalf("missing correlation: %s", body)
+			}
+			if tc.code == "" {
+				if !report.Reachable || report.Status != 204 {
+					t.Fatalf("local app unreachable: %s", body)
+				}
+				return
+			}
+			if report.Reachable || report.Failure == nil || report.Code != tc.code || report.Stage != tc.stage || report.Message == "" || report.Hint == "" {
+				t.Fatalf("lost network diagnosis: %s", body)
+			}
+			if tc.stage == "acl" || tc.stage == "tcp" {
+				if report.AgentRequestID == "" || len(report.ResolvedIPs) == 0 || !strings.Contains(logs.String(), report.AgentRequestID) {
+					t.Fatalf("Agent failure not correlated: %s", body)
+				}
+			}
+			if !strings.Contains(logs.String(), report.RequestID) {
+				t.Fatal("Server request ID absent from logs")
+			}
+			data, _ := os.ReadFile(filepath.Join(f.dir, "audit.jsonl"))
+			if !bytes.Contains(data, []byte(report.RequestID)) || !bytes.Contains(data, []byte(tc.code)) {
+				t.Fatal("audit missing diagnosis")
+			}
+		})
+	}
+	offline, _ := f.site(t, "Offline")
+	svc := f.service(t, offline, "offline", app.URL)
+	_, body := f.request(t, "POST", "/api/services/"+svc.ID+"/probe", nil, f.cookie, "")
+	report := mustJSON[probeReport](t, body)
+	if report.Failure == nil || report.Code != "site_offline" {
+		t.Fatalf("offline: %s", body)
+	}
+}
+
+type lockedBuffer struct {
+	mu     sync.Mutex
+	buffer bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buffer.Write(p)
+}
+func (b *lockedBuffer) String() string { b.mu.Lock(); defer b.mu.Unlock(); return b.buffer.String() }
+
+func TestDiagnosticReportAuthenticationAndSiteIsolation(t *testing.T) {
+	f := setup(t)
+	site, token := f.site(t, "A")
+	other, _ := f.site(t, "B")
+	failure := diagnostics.New("acl_denied", "acl", "reported failure")
+	failure.AgentRequestID = diagnostics.ID()
+	res, _ := f.request(t, "POST", "/tunnel/diagnostics", failure, f.cookie, "")
+	if res.StatusCode != 401 {
+		t.Fatal("console cookie accepted as Agent identity")
+	}
+	body, _ := json.Marshal(failure)
+	req, _ := http.NewRequest("POST", f.h.URL+"/tunnel/diagnostics", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("X-Tunnel-Site", site.ID)
+	req.Header.Set("Content-Type", "application/json")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if res.StatusCode != 204 {
+		t.Fatalf("authenticated Agent report rejected: %d", res.StatusCode)
+	}
+	wire := errors.New(failure.Error())
+	if f.s.describeFailure(site.ID, wire).Message != "reported failure" {
+		t.Fatal("full report not recovered")
+	}
+	// A different site cannot resolve the same ID to this site's private report.
+	f.s.diagnosticMu.Lock()
+	record := f.s.diagnosticCache[site.ID+":"+failure.AgentRequestID]
+	record.failure.Message = "private diagnostic"
+	f.s.diagnosticCache[site.ID+":"+failure.AgentRequestID] = record
+	f.s.diagnosticMu.Unlock()
+	if f.s.describeFailure(other.ID, wire).Message == "private diagnostic" {
+		t.Fatal("cross-site diagnostic leak")
 	}
 }

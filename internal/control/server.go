@@ -24,17 +24,21 @@ import (
 )
 
 type Server struct {
-	cfg            config.Server
-	store          *Store
-	tunnel         *remotedialer.Server
-	auth           *authState
-	secure         bool
-	dummyHash      string
-	public, access *url.URL
-	auditMu        sync.Mutex
-	auditFile      *os.File
-	tunnelMu       sync.Mutex
-	connections    map[string]context.CancelFunc
+	diagnosticMu    sync.Mutex
+	diagnosticCache map[string]diagnosticRecord
+	cfg             config.Server
+	store           *Store
+	tunnel          *remotedialer.Server
+	auth            *authState
+	secure          bool
+	dummyHash       string
+	public, access  *url.URL
+	auditMu         sync.Mutex
+	auditFile       *os.File
+	tunnelMu        sync.Mutex
+	tunnelWG        sync.WaitGroup
+	closing         bool
+	connections     map[string]context.CancelFunc
 }
 
 func New(c config.Server, password string) (*Server, error) {
@@ -52,12 +56,10 @@ func New(c config.Server, password string) (*Server, error) {
 	p, _ := url.Parse(c.PublicURL)
 	a, _ := url.Parse(c.AccessURL)
 	h, _ := bcrypt.GenerateFromPassword([]byte(randomID()), bcrypt.DefaultCost)
-	s := &Server{cfg: c, store: st, auth: newAuth(), secure: p.Scheme == "https", public: p, access: a, auditFile: af, dummyHash: string(h), connections: map[string]context.CancelFunc{}}
+	s := &Server{cfg: c, store: st, auth: newAuth(), secure: p.Scheme == "https", public: p, access: a, auditFile: af, dummyHash: string(h), connections: map[string]context.CancelFunc{}, diagnosticCache: map[string]diagnosticRecord{}}
 	s.tunnel = remotedialer.New(func(r *http.Request) (string, bool, error) {
-		id := r.Header.Get("X-Tunnel-Site")
-		site, ok := s.store.site(id)
-		token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-		return id, ok && constantEqual(site.TokenHash, digest(token)), nil
+		id, ok := s.authenticatedAgent(r)
+		return id, ok, nil
 	}, func(w http.ResponseWriter, r *http.Request, code int, err error) {
 		fail(w, code, "tunnel authentication or handshake failed")
 	})
@@ -65,16 +67,26 @@ func New(c config.Server, password string) (*Server, error) {
 }
 func (s *Server) Close() {
 	s.tunnelMu.Lock()
+	s.closing = true
 	for _, cancel := range s.connections {
 		cancel()
 	}
 	s.tunnelMu.Unlock()
-	s.auditFile.Close()
-}
-func (s *Server) audit(event, user, site, resource string) {
+	s.tunnelWG.Wait()
 	s.auditMu.Lock()
 	defer s.auditMu.Unlock()
-	err := json.NewEncoder(s.auditFile).Encode(map[string]any{"time": time.Now().UTC(), "event": event, "user": user, "siteID": site, "resourceID": resource})
+	s.auditFile.Close()
+}
+func (s *Server) audit(event, user, site, resource string, fields ...map[string]any) {
+	s.auditMu.Lock()
+	defer s.auditMu.Unlock()
+	entry := map[string]any{"time": time.Now().UTC(), "event": event, "user": user, "siteID": site, "resourceID": resource}
+	for _, values := range fields {
+		for key, value := range values {
+			entry[key] = value
+		}
+	}
+	err := json.NewEncoder(s.auditFile).Encode(entry)
 	if err != nil {
 		slog.Error("audit write failed", "error", err)
 	}
@@ -146,6 +158,10 @@ func (s *Server) Handler() http.Handler {
 			s.gateway(w, r)
 			return
 		}
+		if r.URL.Path == "/tunnel/diagnostics" {
+			s.receiveDiagnostic(w, r)
+			return
+		}
 		if r.URL.Path == "/tunnel/connect" {
 			s.connect(w, r)
 			return
@@ -186,14 +202,17 @@ func (s *Server) connect(w http.ResponseWriter, r *http.Request) {
 		fail(w, 403, "agent connections only")
 		return
 	}
-	id := r.Header.Get("X-Tunnel-Site")
-	site, ok := s.store.site(id)
-	token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-	if !ok || !constantEqual(site.TokenHash, digest(token)) {
+	id, ok := s.authenticatedAgent(r)
+	if !ok {
 		fail(w, 401, "invalid site credentials")
 		return
 	}
 	s.tunnelMu.Lock()
+	if s.closing {
+		s.tunnelMu.Unlock()
+		fail(w, 503, "server shutting down")
+		return
+	}
 	if _, exists := s.connections[id]; exists {
 		s.tunnelMu.Unlock()
 		fail(w, 409, "site already connected")
@@ -201,7 +220,9 @@ func (s *Server) connect(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithCancel(r.Context())
 	s.connections[id] = cancel
+	s.tunnelWG.Add(1)
 	s.tunnelMu.Unlock()
+	defer s.tunnelWG.Done()
 	defer func() {
 		cancel()
 		s.tunnelMu.Lock()

@@ -3,6 +3,8 @@ package control
 import (
 	"context"
 	"crypto/tls"
+	"github.com/XUJiahua/tunnel-mvp/internal/diagnostics"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -118,6 +120,7 @@ func (s *Server) gateway(w http.ResponseWriter, r *http.Request) {
 	public := s.serviceURL(id)
 	proxy := &httputil.ReverseProxy{
 		Transport: transport, FlushInterval: -1,
+		ErrorLog: slog.NewLogLogger(slog.Default().With("site_id", svc.SiteID, "service_id", svc.ID, "target", svc.URL).Handler(), slog.LevelWarn),
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.SetURL(target)
 			pr.Out.Header.Del("X-Forwarded-For")
@@ -166,8 +169,7 @@ func (s *Server) gateway(w http.ResponseWriter, r *http.Request) {
 			return nil
 		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
-			s.audit("proxy_error", u.Username, svc.SiteID, svc.ID)
-			fail(w, 502, "upstream unavailable; check agent ACL, DNS, port and TLS trust")
+			s.proxyFailure(w, u, svc, err)
 		},
 	}
 	s.audit("proxy_request", u.Username, svc.SiteID, svc.ID)
@@ -187,24 +189,42 @@ func (s *Server) probe(w http.ResponseWriter, r *http.Request, u User) {
 		fail(w, 404, "service not found")
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 12*time.Second)
+	report := newReport(svc)
+	start := time.Now()
+	w.Header().Set("X-Tunnel-Request-ID", report.RequestID)
+	finish := func() {
+		report.LatencyMs = time.Since(start).Milliseconds()
+		event := "probe"
+		if !report.Reachable {
+			event = "probe_failed"
+		}
+		s.recordDiagnostic(event, u, report)
+		jsonOut(w, 200, report)
+	}
+	if !s.tunnel.HasSession(svc.SiteID) {
+		report.Failure = diagnostics.New("site_offline", "tunnel", "site Agent is not connected")
+		finish()
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 14*time.Second)
 	defer cancel()
 	t := s.transport(svc.SiteID)
 	defer t.CloseIdleConnections()
 	client := &http.Client{Transport: t, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	req, err := http.NewRequestWithContext(ctx, "HEAD", svc.URL, nil)
 	if err != nil {
-		fail(w, 400, "invalid target")
+		report.Failure = diagnostics.New("invalid_target", "configuration", err.Error())
+		finish()
 		return
 	}
-	start := time.Now()
 	resp, err := client.Do(req)
 	if err != nil {
-		s.audit("probe_failed", u.Username, svc.SiteID, svc.ID)
-		jsonOut(w, 200, map[string]any{"reachable": false, "message": "Dial/HTTP failed: check site, ACL, DNS and TLS"})
+		report.Failure = s.describeFailure(svc.SiteID, err)
+		finish()
 		return
 	}
-	resp.Body.Close()
-	s.audit("probe", u.Username, svc.SiteID, svc.ID)
-	jsonOut(w, 200, map[string]any{"reachable": true, "status": resp.StatusCode, "latencyMs": time.Since(start).Milliseconds()})
+	defer resp.Body.Close()
+	report.Reachable = true
+	report.Status = resp.StatusCode
+	finish()
 }

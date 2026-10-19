@@ -163,6 +163,56 @@ test("enroll site, open and log in to internal app, enforce viewer permissions",
   expect(leakedCookies).toEqual([]);
   await app.close();
 
+  // All processes are local and the site is online, but port 3001 is outside
+  // the Agent ACL. The browser must show the actual failure and both trace IDs.
+  await page.getByRole("button", { name: "添加应用", exact: true }).click();
+  await page.getByLabel("应用名称").fill("白名单诊断");
+  await page.getByLabel("所属站点").selectOption(siteID);
+  await page.getByLabel("内网地址").fill("http://127.0.0.1:3001");
+  await page.getByRole("button", { name: "创建", exact: true }).click();
+  const failedRow = page
+    .getByRole("row")
+    .filter({ has: page.getByText("白名单诊断", { exact: true }) });
+  await failedRow
+    .getByRole("button", { name: "检测连接", exact: true })
+    .click();
+  const diagnosis = page.getByRole("dialog");
+  await expect(
+    diagnosis.getByRole("heading", { name: "连接诊断 · 白名单诊断" }),
+  ).toBeVisible();
+  await expect(diagnosis.locator(".diagnostic-status")).toContainText(
+    "acl_denied",
+  );
+  await expect(
+    diagnosis.getByText("Agent 请求 ID", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    diagnosis.getByText("Server 请求 ID", { exact: true }),
+  ).toBeVisible();
+  await expect(diagnosis.getByRole("alert")).toContainText("allow list");
+  await expect(diagnosis.locator(".diagnostic-attempts")).toContainText(
+    "127.0.0.1",
+  );
+  const retry = page.waitForResponse(
+    (response) =>
+      response.url().endsWith("/probe") &&
+      response.request().method() === "POST",
+  );
+  await diagnosis.getByRole("button", { name: "重试", exact: true }).click();
+  expect((await (await retry).json()).code).toBe("acl_denied");
+  await page.screenshot({
+    path: test.info().outputPath("diagnostic.png"),
+    fullPage: true,
+  });
+  await diagnosis.getByRole("button", { name: "关闭", exact: true }).click();
+  await failedRow
+    .getByRole("button", { name: "诊断详情", exact: true })
+    .click();
+  await expect(
+    diagnosis.getByRole("heading", { name: "连接诊断 · 白名单诊断" }),
+  ).toBeVisible();
+  await diagnosis.getByRole("button", { name: "关闭", exact: true }).click();
+
   await page.getByRole("button", { name: "访问权限", exact: true }).click();
   await page.getByRole("button", { name: "添加成员", exact: true }).click();
   await page.getByLabel("用户名", { exact: true }).fill("reader");

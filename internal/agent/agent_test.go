@@ -2,6 +2,8 @@ package agent
 
 import (
 	"context"
+	"fmt"
+	"github.com/XUJiahua/tunnel-mvp/internal/diagnostics"
 	"net"
 	"net/netip"
 	"strconv"
@@ -59,5 +61,25 @@ func TestPolicyRejectsEmptyAndInvalidRules(t *testing.T) {
 		if _, err := NewPolicy(rules); err == nil {
 			t.Fatalf("accepted invalid rules: %+v", rules)
 		}
+	}
+}
+
+func TestDiagnosticStages(t *testing.T) {
+	p, err := NewPolicy([]config.Rule{{CIDR: "127.0.0.0/8", Ports: []int{3000}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = p.DialContext(context.Background(), "tcp", "127.0.0.1:3001")
+	d := diagnostics.Describe(err)
+	if d.Code != "acl_denied" || d.AgentRequestID == "" || len(d.Attempts) != 1 || d.Attempts[0].Allowed || d.ResolvedIPs[0] != "127.0.0.1" {
+		t.Fatalf("missing ACL detail: %+v", d)
+	}
+	p.resolver = &net.Resolver{PreferGo: true, Dial: func(context.Context, string, string) (net.Conn, error) {
+		return nil, fmt.Errorf("controlled DNS lookup failure")
+	}}
+	_, err = p.DialContext(context.Background(), "tcp", "does-not-exist.invalid:3000")
+	d = diagnostics.Describe(err)
+	if d.Code != "dns_failed" || d.Stage != "dns" || d.AgentRequestID == "" {
+		t.Fatalf("missing DNS detail: %+v", d)
 	}
 }

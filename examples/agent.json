@@ -2,7 +2,24 @@
   "serverURL": "http://localhost:8080",
   "siteID": "REPLACE_WITH_SITE_ID",
   "allow": [
-    {"cidr": "127.0.0.0/8", "ports": [3000]},
-    {"cidr": "10.10.0.0/16", "host": "grafana.internal", "ports": [3000]}
+    {
+      "cidr": "127.0.0.0/8",
+      "ports": [
+        3000
+      ]
+    },
+    {
+      "cidr": "::1/128",
+      "ports": [
+        3000
+      ]
+    },
+    {
+      "cidr": "10.10.0.0/16",
+      "host": "grafana.internal",
+      "ports": [
+        3000
+      ]
+    }
   ]
 }

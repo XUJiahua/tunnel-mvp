@@ -1,41 +1,54 @@
 package config
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/url"
-	"os"
 	"strings"
 )
 
-type Server struct {
-	Listen        string `json:"listen"`
-	PublicURL     string `json:"publicURL"`
-	AccessURL     string `json:"accessURL"`
-	DataDir       string `json:"dataDir"`
-	AdminUsername string `json:"adminUsername"`
-}
-type Rule struct {
-	CIDR  string `json:"cidr"`
-	Host  string `json:"host,omitempty"`
-	Ports []int  `json:"ports"`
-}
-type Agent struct {
-	ServerURL string `json:"serverURL"`
-	SiteID    string `json:"siteID"`
-	Allow     []Rule `json:"allow"`
+type Logging struct {
+	LogLevel  string `json:"logLevel,omitempty" mapstructure:"logLevel"`
+	LogFormat string `json:"logFormat,omitempty" mapstructure:"logFormat"`
 }
 
-func Load(path string, v any) error {
-	f, err := os.Open(path)
-	if err != nil {
-		return err
+func (l *Logging) Validate() error {
+	if l.LogLevel == "" {
+		l.LogLevel = "info"
 	}
-	defer f.Close()
-	d := json.NewDecoder(f)
-	d.DisallowUnknownFields()
-	return d.Decode(v)
+	if l.LogFormat == "" {
+		l.LogFormat = "text"
+	}
+	switch l.LogLevel {
+	case "debug", "info", "warn", "error":
+	default:
+		return fmt.Errorf("logLevel must be debug, info, warn or error")
+	}
+	if l.LogFormat != "text" && l.LogFormat != "json" {
+		return fmt.Errorf("logFormat must be text or json")
+	}
+	return nil
 }
+
+type Server struct {
+	Logging       `mapstructure:",squash"`
+	Listen        string `json:"listen" mapstructure:"listen"`
+	PublicURL     string `json:"publicURL" mapstructure:"publicURL"`
+	AccessURL     string `json:"accessURL" mapstructure:"accessURL"`
+	DataDir       string `json:"dataDir" mapstructure:"dataDir"`
+	AdminUsername string `json:"adminUsername" mapstructure:"adminUsername"`
+}
+type Rule struct {
+	CIDR  string `json:"cidr" mapstructure:"cidr"`
+	Host  string `json:"host,omitempty"`
+	Ports []int  `json:"ports" mapstructure:"ports"`
+}
+type Agent struct {
+	Logging   `mapstructure:",squash"`
+	ServerURL string `json:"serverURL" mapstructure:"serverURL"`
+	SiteID    string `json:"siteID" mapstructure:"siteID"`
+	Allow     []Rule `json:"allow" mapstructure:"allow"`
+}
+
 func Origin(raw string) (*url.URL, error) {
 	u, err := url.Parse(raw)
 	if err != nil || u.Hostname() == "" || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
@@ -52,6 +65,9 @@ func Origin(raw string) (*url.URL, error) {
 	return u, nil
 }
 func (s *Server) Validate() error {
+	if err := s.Logging.Validate(); err != nil {
+		return err
+	}
 	p, err := Origin(s.PublicURL)
 	if err != nil {
 		return err
@@ -76,6 +92,24 @@ func (s *Server) Validate() error {
 	}
 	if s.AdminUsername == "" {
 		s.AdminUsername = "admin"
+	}
+	return nil
+}
+
+func (a *Agent) Validate() error {
+	if err := a.Logging.Validate(); err != nil {
+		return err
+	}
+	origin, err := Origin(a.ServerURL)
+	if err != nil {
+		return err
+	}
+	a.ServerURL = origin.String()
+	if a.SiteID == "" {
+		return fmt.Errorf("siteID is required (config, TUNNEL_SITE_ID or --site-id)")
+	}
+	if len(a.Allow) == 0 {
+		return fmt.Errorf("Agent allow list must not be empty")
 	}
 	return nil
 }

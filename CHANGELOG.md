@@ -1,5 +1,13 @@
 # 更新记录
 
+## Unreleased
+
+- 使用 Cobra / Viper 管理命令、JSON / YAML 配置、环境变量、参数覆盖和日志选项，兼容 `-config`。
+- 增加 `agent diagnose`、`--check-config` 和 shell 补全。
+- 探测与代理错误保留 DNS / ACL / TCP / TLS / HTTP 阶段、目标、解析 IP 与请求 ID，并在界面显示完整诊断。
+- Agent 鉴权诊断上报绕过 remotedialer 的 100 字节错误限制，兼容旧隧道协议。
+- 等待站点连接退出后关闭审计文件，避免正常停机产生审计写入错误。
+
 ## v0.1.0
 
 - Go 控制面、内网 Agent、自动重连和 Agent 令牌轮换。
