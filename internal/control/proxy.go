@@ -58,7 +58,7 @@ func (s *Server) validGrant(g grant, serviceID string) (User, bool) {
 	s.auth.mu.Lock()
 	sess, ok := s.auth.sessions[g.SessionKey]
 	s.auth.mu.Unlock()
-	if !ok || time.Now().After(sess.Expires) {
+	if !ok || time.Now().After(sess.Expires) || !s.identitySessionAllowed(sess) {
 		return User{}, false
 	}
 	u, ok := s.store.user(sess.UserID)

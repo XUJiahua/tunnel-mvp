@@ -361,3 +361,5 @@ Agent 签名升级：[设计](docs/design/agent-updates.md) · [发布、主机�
 SQLite 增量持久化：[设计](docs/design/incremental-sqlite.md) · [操作与写入基准](docs/sqlite-incremental-operations.md)。
 
 审计增量轮转：[设计](docs/design/audit-rotation.md) · [升级与故障操作](docs/audit-rotation-operations.md)。
+
+Keycloak 禁用自动撤销：[设计](docs/design/keycloak-session-sync.md) · [配置与演练](docs/keycloak-sync-operations.md)。

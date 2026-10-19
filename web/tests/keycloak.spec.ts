@@ -27,6 +27,7 @@ const control = "http://localhost:19880",
 const issuer = `${idp}/realms/${realm}`;
 const password = "Fixture-" + randomBytes(16).toString("hex");
 const clientSecret = randomBytes(24).toString("hex");
+const syncSecret = randomBytes(24).toString("hex");
 const subject = "2869bcad-a6aa-4ce1-84fc-4289cc356000";
 let dir: string, importPath: string;
 let keycloak: ChildProcess, server: ChildProcess, agent: ChildProcess;
@@ -92,6 +93,51 @@ function otp(secret: string) {
     .toString()
     .padStart(6, "0");
 }
+async function keycloakAdminToken() {
+  const r = await fetch(idp + "/realms/master/protocol/openid-connect/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "password",
+      client_id: "admin-cli",
+      username: "admin",
+      password,
+    }),
+  });
+  expect(r.status).toBe(200);
+  return (await r.json()).access_token as string;
+}
+async function configureSyncReader() {
+  const token = await keycloakAdminToken();
+  const base = idp + `/admin/realms/${realm}`;
+  async function get(path: string) {
+    const r = await fetch(base + path, {
+      headers: { Authorization: "Bearer " + token },
+    });
+    expect(r.status).toBe(200);
+    return r.json();
+  }
+  const serviceClient = (await get("/clients?clientId=tunnel-sync-e2e"))[0],
+    realmClient = (await get("/clients?clientId=realm-management"))[0];
+  const serviceUser = await get(
+    `/clients/${serviceClient.id}/service-account-user`,
+  );
+  const roles = [];
+  for (const role of ["view-users", "query-users"])
+    roles.push(await get(`/clients/${realmClient.id}/roles/${role}`));
+  const r = await fetch(
+    base + `/users/${serviceUser.id}/role-mappings/clients/${realmClient.id}`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer " + token,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(roles),
+    },
+  );
+  expect(r.status).toBe(204);
+}
 async function passwordLogin(page: Page) {
   await page.getByRole("link", { name: "使用统一身份登录" }).click();
   await page.locator("#username").fill("operator");
@@ -130,6 +176,16 @@ test.beforeAll(async () => {
             "backchannel.logout.session.required": "true",
             "post.logout.redirect.uris": control + "/",
           },
+        },
+        {
+          clientId: "tunnel-sync-e2e",
+          enabled: true,
+          protocol: "openid-connect",
+          publicClient: false,
+          secret: syncSecret,
+          serviceAccountsEnabled: true,
+          standardFlowEnabled: false,
+          directAccessGrantsEnabled: false,
         },
       ],
       users: [
@@ -179,6 +235,7 @@ test.beforeAll(async () => {
       { timeout: 90_000 },
     )
     .toBe(true);
+  await configureSyncReader();
   writeFileSync(
     resolve(dir, "server.json"),
     JSON.stringify({
@@ -187,7 +244,18 @@ test.beforeAll(async () => {
       accessURL: "http://apps.localhost:19880",
       dataDir: resolve(dir, "data"),
       storage: process.env.TUNNEL_TEST_STORAGE || "json",
-      oidc: { issuer, clientID: "tunnel-e2e", sessionMinutes: 5 },
+      oidc: {
+        issuer,
+        clientID: "tunnel-e2e",
+        sessionMinutes: 5,
+        keycloakSync: {
+          enabled: true,
+          clientID: "tunnel-sync-e2e",
+          subjectIsUserID: true,
+          pollSeconds: 1,
+          maxStaleSeconds: 10,
+        },
+      },
     }),
   );
   server = start(
@@ -196,6 +264,7 @@ test.beforeAll(async () => {
     {
       TUNNEL_ADMIN_PASSWORD: password,
       TUNNEL_OIDC_CLIENT_SECRET: clientSecret,
+      TUNNEL_KEYCLOAK_SYNC_CLIENT_SECRET: syncSecret,
     },
     "control",
   );
@@ -438,7 +507,8 @@ test("real Keycloak OTP, authorization, session revocation and back-channel logo
     await expect
       .poll(() => otp(secret), { timeout: 35_000 })
       .not.toBe(firstLoginCode);
-    await member.locator("#otp").fill(otp(secret));
+    const secondLoginCode = otp(secret);
+    await member.locator("#otp").fill(secondLoginCode);
     await member.locator("#kc-login").click();
     await expect(member.locator(".profile")).toContainText("keycloak-member");
     await member
@@ -454,6 +524,104 @@ test("real Keycloak OTP, authorization, session revocation and back-channel logo
       path: test.info().outputPath("keycloak-backchannel-logout.png"),
       fullPage: true,
     });
+    // Disable the real IdP user without calling its logout endpoint. The local
+    // status bridge must revoke console/application sessions and their streams.
+    await member.locator("#username").fill("operator");
+    await member.locator("#password").fill(password);
+    await member.locator("#kc-login").click();
+    await expect
+      .poll(() => otp(secret), { timeout: 35000 })
+      .not.toBe(secondLoginCode);
+    await member.locator("#otp").fill(otp(secret));
+    await member.locator("#kc-login").click();
+    await expect(member.locator(".profile")).toContainText("keycloak-member");
+    const newLaunch = await member.request.post(
+      control + `/api/services/${app.result.id}/launch`,
+      { headers: { Origin: control } },
+    );
+    expect(newLaunch.status()).toBe(200);
+    await appPage.goto((await newLaunch.json()).url);
+    await expect(appPage.getByRole("heading")).toHaveText(
+      "Real Keycloak authenticated application",
+    );
+    await appPage.evaluate(() => {
+      const w = window as any;
+      w.sync = { ready: false, closed: false, wsReady: false, wsClosed: false };
+      const socket = new WebSocket(
+        location.origin.replace("http", "ws") + "/ws",
+      );
+      socket.onmessage = () => (w.sync.wsReady = true);
+      socket.onclose = () => (w.sync.wsClosed = true);
+      void (async () => {
+        try {
+          const r = await fetch("/events"),
+            reader = r.body!.getReader();
+          await reader.read();
+          w.sync.ready = true;
+          while (!(await reader.read()).done) {}
+        } catch {
+        } finally {
+          w.sync.closed = true;
+        }
+      })();
+    });
+    await expect
+      .poll(() =>
+        appPage.evaluate(
+          () => (window as any).sync.ready && (window as any).sync.wsReady,
+        ),
+      )
+      .toBe(true);
+    const disableToken = await keycloakAdminToken();
+    const disable = await fetch(
+      idp + `/admin/realms/${realm}/users/${subject}`,
+      {
+        method: "PUT",
+        headers: {
+          Authorization: "Bearer " + disableToken,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ enabled: false }),
+      },
+    );
+    expect(disable.status).toBe(204);
+    await expect
+      .poll(
+        async () => (await member.request.get(control + "/api/me")).status(),
+        { timeout: 10000 },
+      )
+      .toBe(401);
+    await expect
+      .poll(() =>
+        appPage.evaluate(
+          () => (window as any).sync.closed && (window as any).sync.wsClosed,
+        ),
+      )
+      .toBe(true);
+    expect(await appPage.evaluate(async () => (await fetch("/")).status)).toBe(
+      401,
+    );
+    const metrics = await fetch(control + "/api/metrics", {
+      headers: { Cookie: adminCookie },
+    });
+    const text = await metrics.text();
+    expect(
+      Number(text.match(/tunnel_identity_sync_revocations_total (\d+)/)?.[1]),
+    ).toBeGreaterThan(0);
+    expect((await api("/me")).result.username).toBe("admin");
+    const enable = await fetch(
+      idp + `/admin/realms/${realm}/users/${subject}`,
+      {
+        method: "PUT",
+        headers: {
+          Authorization: "Bearer " + disableToken,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ enabled: true }),
+      },
+    );
+    expect(enable.status).toBe(204);
+    expect((await member.request.get(control + "/api/me")).status()).toBe(401);
   } finally {
     await context.close();
   }

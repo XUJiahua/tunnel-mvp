@@ -100,7 +100,7 @@ func (s *Server) currentUser(r *http.Request) (User, string, bool) {
 		s.auth.sessions[key] = sess
 	}
 	s.auth.mu.Unlock()
-	if !ok || time.Now().After(sess.Expires) {
+	if !ok || time.Now().After(sess.Expires) || !s.identitySessionAllowed(sess) {
 		return User{}, "", false
 	}
 	u, ok := s.store.user(sess.UserID)

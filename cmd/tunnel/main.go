@@ -92,6 +92,11 @@ func newRootCommand() *cobra.Command {
 	}}
 	server.Flags().StringSlice("oidc-required-acr", nil, "Accepted OIDC acr values; at least one must match when configured")
 	server.Flags().StringSlice("oidc-required-amr", nil, "Required OIDC amr methods; every configured value must be present")
+	server.Flags().Bool("keycloak-sync-enabled", false, "Check Keycloak user status for OIDC sessions")
+	server.Flags().Bool("keycloak-sync-subject-user-id", false, "Explicitly attest OIDC sub equals the Keycloak user ID")
+	server.Flags().String("keycloak-sync-client-id", "", "Least-privilege service client ID; secret uses TUNNEL_KEYCLOAK_SYNC_CLIENT_SECRET")
+	server.Flags().Int("keycloak-sync-poll", 0, "Active OIDC user polling interval in seconds")
+	server.Flags().Int("keycloak-sync-max-stale", 0, "Maximum unverified OIDC user status age in seconds")
 	server.Flags().String("oidc-issuer", "", "OIDC issuer URL; HTTPS except loopback")
 	server.Flags().String("oidc-client-id", "", "OIDC client ID; secret uses TUNNEL_OIDC_CLIENT_SECRET only")
 	server.Flags().Int("oidc-session-minutes", 0, "Maximum OIDC local session duration (1–720 minutes)")

@@ -32,12 +32,20 @@ func (l *Logging) Validate() error {
 	return nil
 }
 
+type KeycloakSync struct {
+	Enabled         bool   `json:"enabled" mapstructure:"enabled"`
+	ClientID        string `json:"clientID" mapstructure:"clientID"`
+	SubjectIsUserID bool   `json:"subjectIsUserID" mapstructure:"subjectIsUserID"`
+	PollSeconds     int    `json:"pollSeconds" mapstructure:"pollSeconds"`
+	MaxStaleSeconds int    `json:"maxStaleSeconds" mapstructure:"maxStaleSeconds"`
+}
 type OIDC struct {
-	RequiredACR    []string `json:"requiredACR,omitempty" mapstructure:"requiredACR"`
-	RequiredAMR    []string `json:"requiredAMR,omitempty" mapstructure:"requiredAMR"`
-	Issuer         string   `json:"issuer" mapstructure:"issuer"`
-	ClientID       string   `json:"clientID" mapstructure:"clientID"`
-	SessionMinutes int      `json:"sessionMinutes" mapstructure:"sessionMinutes"`
+	KeycloakSync   KeycloakSync `json:"keycloakSync,omitempty" mapstructure:"keycloakSync"`
+	RequiredACR    []string     `json:"requiredACR,omitempty" mapstructure:"requiredACR"`
+	RequiredAMR    []string     `json:"requiredAMR,omitempty" mapstructure:"requiredAMR"`
+	Issuer         string       `json:"issuer" mapstructure:"issuer"`
+	ClientID       string       `json:"clientID" mapstructure:"clientID"`
+	SessionMinutes int          `json:"sessionMinutes" mapstructure:"sessionMinutes"`
 }
 type Server struct {
 	OIDC                 OIDC `json:"oidc" mapstructure:"oidc"`
@@ -99,6 +107,20 @@ func (s *Server) Validate() error {
 		return fmt.Errorf("OIDC sessionMinutes requires issuer and clientID")
 	}
 
+	if k := &s.OIDC.KeycloakSync; k.Enabled {
+		if s.OIDC.Issuer == "" || strings.TrimSpace(k.ClientID) == "" || len(k.ClientID) > 255 || !k.SubjectIsUserID {
+			return fmt.Errorf("keycloakSync requires OIDC, a service clientID and explicit subjectIsUserID=true")
+		}
+		if k.PollSeconds == 0 {
+			k.PollSeconds = 15
+		}
+		if k.MaxStaleSeconds == 0 {
+			k.MaxStaleSeconds = 60
+		}
+		if k.PollSeconds < 1 || k.PollSeconds > 300 || k.MaxStaleSeconds < 2*k.PollSeconds+5 || k.MaxStaleSeconds > 3600 {
+			return fmt.Errorf("keycloakSync requires pollSeconds 1–300 and maxStaleSeconds >= 2*pollSeconds+5, <=3600")
+		}
+	}
 	if s.Storage == "" {
 		s.Storage = "json"
 	}

@@ -25,6 +25,7 @@ import (
 )
 
 type Server struct {
+	identitySync     *keycloakSync
 	history          *historyStore
 	oidc             *oidcLogin
 	accessMu         sync.RWMutex

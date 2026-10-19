@@ -21,7 +21,7 @@ type pooledTransport struct {
 	service    Service
 	transport  *http.Transport
 }
-type counters struct{ requests, errors, probes, historyErrors, auditIndexErrors atomic.Uint64 }
+type counters struct{ requests, errors, probes, historyErrors, auditIndexErrors, identitySyncChecks, identitySyncErrors, identitySyncRevocations atomic.Uint64 }
 
 // Pool keys are immutable application identities; different sites and targets
 // never share an HTTP connection. Every request still passes authorization.
@@ -143,6 +143,7 @@ func (s *Server) startBackground() {
 			}
 		}
 	}()
+	s.startIdentitySync(ctx)
 }
 func (s *Server) probeAll(ctx context.Context) {
 	// Four workers bound concurrency and shutdown latency; one batch at a time.
@@ -219,6 +220,14 @@ func metric(w io.Writer, name, help, kind string, value any) {
 func (s *Server) metrics(w http.ResponseWriter, r *http.Request, _ User) {
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
+	syncEnabled := 0
+	if s.identitySync != nil {
+		syncEnabled = 1
+	}
+	metric(w, "tunnel_identity_sync_enabled", "Keycloak user status checks enabled.", "gauge", syncEnabled)
+	metric(w, "tunnel_identity_sync_checks_total", "Completed Keycloak user status checks.", "counter", s.stats.identitySyncChecks.Load())
+	metric(w, "tunnel_identity_sync_errors_total", "Keycloak status/token check failures.", "counter", s.stats.identitySyncErrors.Load())
+	metric(w, "tunnel_identity_sync_revocations_total", "OIDC sessions revoked by user status or staleness.", "counter", s.stats.identitySyncRevocations.Load())
 	metric(w, "tunnel_proxy_requests_total", "Authorized proxy requests.", "counter", s.stats.requests.Load())
 	metric(w, "tunnel_proxy_errors_total", "Proxy transport errors.", "counter", s.stats.errors.Load())
 	metric(w, "tunnel_audit_index_errors_total", "Audit source/index writes or rebuild failures.", "counter", s.stats.auditIndexErrors.Load())

@@ -74,7 +74,7 @@ func (s *Server) configureOIDC() error {
 	// Confidential clients use client_secret_basic; tokens never reach the browser.
 	endpoint.AuthStyle = oauth2.AuthStyleInHeader
 	s.oidc = &oidcLogin{config: oauth2.Config{ClientID: s.cfg.OIDC.ClientID, ClientSecret: secret, Endpoint: endpoint, RedirectURL: s.cfg.PublicURL + "/auth/oidc/callback", Scopes: []string{oidc.ScopeOpenID}}, verifier: provider.VerifierContext(base, &oidc.Config{ClientID: s.cfg.OIDC.ClientID}), client: client, endSession: metadata.EndSession, pending: map[string]oidcAttempt{}, logoutReplay: map[string]time.Time{}, logoutCutoff: map[string]time.Time{}}
-	return nil
+	return s.configureKeycloakSync()
 }
 func (s *Server) authOptions(w http.ResponseWriter, r *http.Request) {
 	jsonOut(w, 200, map[string]any{"oidc": s.oidc != nil, "issuer": s.cfg.OIDC.Issuer, "oidcLogout": s.oidc != nil && s.oidc.endSession != ""})
@@ -176,6 +176,22 @@ func (s *Server) callbackOIDC(w http.ResponseWriter, r *http.Request) {
 		s.oidcFailed(w, r, "authentication_context")
 		return
 	}
+	if s.identitySync != nil {
+		checked := false
+		for _, u := range s.store.snapshot().Users {
+			if !u.Disabled && u.Identity != nil && u.Identity.Issuer == id.Issuer && u.Identity.Subject == id.Subject {
+				checkCtx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+				result := s.identitySync.check(checkCtx, u)
+				cancel()
+				checked = result.err == nil && result.enabled
+				break
+			}
+		}
+		if !checked {
+			s.oidcFailed(w, r, "identity_sync")
+			return
+		}
+	}
 	// The binding and disabled flag are read after external IO under the same lock
 	// used by mutation/revocation. A concurrent disable/rebind cannot mint a session.
 	unlock := s.lockMutation(r)
@@ -194,6 +210,9 @@ func (s *Server) callbackOIDC(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, u := range s.store.snapshot().Users {
 		if !u.Disabled && u.Identity != nil && u.Identity.Issuer == id.Issuer && u.Identity.Subject == id.Subject {
+			if !s.identitySessionAllowed(session{UserID: u.ID, Method: "oidc", Issuer: id.Issuer, Subject: id.Subject}) {
+				break
+			}
 			expires := time.Now().Add(time.Duration(s.cfg.OIDC.SessionMinutes) * time.Minute)
 			if id.Expiry.Before(expires) {
 				expires = id.Expiry
