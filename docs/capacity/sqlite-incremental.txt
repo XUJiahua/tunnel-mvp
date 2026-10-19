@@ -1,0 +1,9 @@
+goos: linux
+goarch: amd64
+pkg: github.com/XUJiahua/tunnel-mvp/internal/state
+cpu: AMD EPYC 9V74 80-Core Processor                
+BenchmarkSQLiteSparseRename-8   	      20	  10866113 ns/op	         2.000 sql_rows/op	 4095760 B/op	   15061 allocs/op
+BenchmarkSQLiteSparseRename-8   	      20	  13925349 ns/op	         2.000 sql_rows/op	 4029665 B/op	   15061 allocs/op
+BenchmarkSQLiteSparseRename-8   	      20	  10940670 ns/op	         2.000 sql_rows/op	 4265357 B/op	   15067 allocs/op
+PASS
+ok  	github.com/XUJiahua/tunnel-mvp/internal/state	1.156s

@@ -2,7 +2,6 @@ package state
 
 import (
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"net/url"
 	"path/filepath"
@@ -15,7 +14,11 @@ import (
 const SchemaVersion = 10
 const applicationID = 0x54554e4c // TUNL
 
-type sqliteBackend struct{ db *sql.DB }
+type sqliteBackend struct {
+	db     *sql.DB
+	rows   []sqlTable
+	grants map[string]userGrants
+}
 
 func connectSQLite(path string) (*sqliteBackend, error) {
 	absolute, err := filepath.Abs(path)
@@ -38,7 +41,7 @@ func connectSQLite(path string) (*sqliteBackend, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("open SQLite: %w", err)
 	}
-	return &sqliteBackend{db}, nil
+	return &sqliteBackend{db: db}, nil
 }
 
 var schemaV7 = []string{`CREATE TABLE agents (id TEXT PRIMARY KEY,position INTEGER NOT NULL UNIQUE,payload TEXT NOT NULL CHECK(json_valid(payload)))`}
@@ -199,108 +202,13 @@ func openSQLite(path string) (backend, State, error) {
 	if err = Validate(&s); err != nil {
 		return nil, State{}, err
 	}
+	if e := b.cache(s); e != nil {
+		return nil, State{}, e
+	}
 	ok = true
 	return b, s, nil
 }
-func (b *sqliteBackend) close() error { return b.db.Close() }
-func (b *sqliteBackend) save(s State) error {
-	tx, err := b.db.Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	// This version deliberately writes one validated aggregate per transaction.
-	// The in-memory read model stays fast; incremental SQL updates can be added
-	// behind Repository without changing control-plane authorization handlers.
-	for _, table := range []string{"agents", "roles", "organizations", "invites", "groups", "user_services", "user_sites", "services", "sites", "users"} {
-		if _, err = tx.Exec("DELETE FROM " + table); err != nil {
-			return err
-		}
-	}
-	for i, v := range s.Users {
-		issuer, subject := "", ""
-		if v.Identity != nil {
-			issuer, subject = v.Identity.Issuer, v.Identity.Subject
-		}
-		if _, err = tx.Exec("INSERT INTO users VALUES(?,?,?,?,?,?,?,?,?,?)", v.ID, i, v.Username, v.PasswordHash, v.Role, v.Disabled, issuer, subject, v.OrganizationID, v.RoleID); err != nil {
-			return err
-		}
-	}
-	for i, v := range s.Sites {
-		if _, err = tx.Exec("INSERT INTO sites VALUES(?,?,?,?,?,?,?)", v.ID, i, v.Name, v.TokenHash, v.CreatedAt.Format(time.RFC3339Nano), v.OrganizationID, v.LegacyDisabled); err != nil {
-			return err
-		}
-	}
-	for i, v := range s.Services {
-		if _, err = tx.Exec("INSERT INTO services VALUES(?,?,?,?,?,?,?,?,?,?,?)", v.ID, i, v.Name, v.SiteID, v.URL, v.OrganizationID, v.CustomDomain, v.HealthPath, v.HealthMethod, v.HealthExpectedStatus, v.ConnectionMode); err != nil {
-			return err
-		}
-	}
-	for _, v := range s.Users {
-		for i, id := range v.SiteIDs {
-			if _, err = tx.Exec("INSERT INTO user_sites VALUES(?,?,?)", v.ID, id, i); err != nil {
-				return err
-			}
-		}
-		for i, id := range v.ServiceIDs {
-			if _, err = tx.Exec("INSERT INTO user_services VALUES(?,?,?)", v.ID, id, i); err != nil {
-				return err
-			}
-		}
-	}
-	for i, v := range s.Groups {
-		payload, err := json.Marshal(v)
-		if err != nil {
-			return err
-		}
-		if _, err = tx.Exec("INSERT INTO groups VALUES(?,?,?)", v.ID, i, string(payload)); err != nil {
-			return err
-		}
-	}
-	for i, v := range s.Invites {
-		payload, err := json.Marshal(v)
-		if err != nil {
-			return err
-		}
-		if _, err = tx.Exec("INSERT INTO invites VALUES(?,?,?)", v.ID, i, string(payload)); err != nil {
-			return err
-		}
-	}
-	for table, values := range map[string][]any{"agents": {}, "organizations": {}, "roles": {}} {
-		if table == "agents" {
-			for _, v := range s.Agents {
-				values = append(values, v)
-			}
-		} else if table == "organizations" {
-			for _, v := range s.Organizations {
-				values = append(values, v)
-			}
-		} else {
-			for _, v := range s.Roles {
-				values = append(values, v)
-			}
-		}
-		for i, v := range values {
-			raw, err := json.Marshal(v)
-			if err != nil {
-				return err
-			}
-			id := ""
-			switch x := v.(type) {
-			case AgentRegistration:
-				id = x.ID
-			case Organization:
-				id = x.ID
-			case Role:
-				id = x.ID
-			}
-			if _, err = tx.Exec("INSERT INTO "+table+" VALUES(?,?,?)", id, i, string(raw)); err != nil {
-				return err
-			}
-		}
-	}
-	return tx.Commit()
-}
+func (b *sqliteBackend) close() error         { return b.db.Close() }
 func (b *sqliteBackend) load() (State, error) { return loadSQLite(b.db) }
 
 type sqlReader interface {

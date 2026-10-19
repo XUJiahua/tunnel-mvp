@@ -357,3 +357,5 @@ Agent 签名升级：[设计](docs/design/agent-updates.md) · [发布、主机�
 连接身份隔离与容量：[设计](docs/design/session-pools.md) · [操作](docs/connection-mode-operations.md) · [实测报告](docs/capacity-report.md)。
 
 组织角色委派：[设计](docs/design/delegated-roles.md) · [操作](docs/delegated-role-operations.md)。
+
+SQLite 增量持久化：[设计](docs/design/incremental-sqlite.md) · [操作与写入基准](docs/sqlite-incremental-operations.md)。
