@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "./api";
 type Service = { id: string; name: string; url: string };
 type Sample = {
+  nodeID?: string;
   checkedAt: string;
   reachable: boolean;
   healthy: boolean;
@@ -175,7 +176,7 @@ export function MonitoringHistory({ services }: { services: Service[] }) {
                 >
                   <title>
                     {new Date(s.checkedAt).toLocaleString()} ·{" "}
-                    {s.status || s.code || "不可达"} · {s.latencyMs} ms
+                    {s.status || s.code || "不可达"} · {s.latencyMs} ms{s.nodeID ? ` · ${s.nodeID}` : ""}
                   </title>
                 </rect>
               </g>
@@ -191,6 +192,7 @@ export function MonitoringHistory({ services }: { services: Service[] }) {
               <thead>
                 <tr>
                   <th>检查时间</th>
+                  {samples.some((s) => s.nodeID) && <th>来源节点</th>}
                   <th>健康状态</th>
                   <th>HTTP / 错误</th>
                   <th>延迟</th>
@@ -203,6 +205,7 @@ export function MonitoringHistory({ services }: { services: Service[] }) {
                   .map((s, i) => (
                     <tr key={`${s.checkedAt}-${i}`}>
                       <td>{new Date(s.checkedAt).toLocaleString()}</td>
+                      {samples.some((sample) => sample.nodeID) && <td><code>{s.nodeID || "未知来源"}</code></td>}
                       <td>
                         {s.healthy
                           ? "健康"

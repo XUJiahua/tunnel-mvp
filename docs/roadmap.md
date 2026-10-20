@@ -178,3 +178,9 @@ PostgreSQL schema v2 保存会话、票据、OIDC 交互、注销与身份证明
 ## HA-3：跨节点 Agent 路由
 
 PR #30 引入 schema v3 节点 incarnation/10 秒数据库租约、5 秒本地截止时间、递增 Agent generation 与就绪路由、独立 mTLS CONNECT 流及接收端授权重证。包括真实双 Server/LB/Agent 的跨节点流、注销与心跳中断/接管/POST 不重放测试；验收结论以最终 CI 为准。部署见 [HA 手册](ha-operations.md)，实现见 [路由设计](design/cluster-routing.md)。HA-4 继续聚合/来源去重、滚动版本和完整恢复演练。
+
+## HA-4：共享观测与维护恢复
+
+开发分支 `feat/cluster-observability` 实现独立版本的共享审计/健康表、本地持久队列、事件 ID 幂等重放、来源节点标记、事务内权限重证、节点报告及定向排空 API。控制台增加节点覆盖视图和来源过滤。基础 schema v3、运维归档格式及内部流协议保持兼容，边界见[观测设计](design/cluster-observations.md)。
+
+[PR #31](https://github.com/XUJiahua/tunnel-mvp/pull/31) 提供 PG15/18 双节点验证及真实 CLI/Agent/浏览器演练：HA-3/HA-4 混跑、排空保留已有 SSE、逐节点升级与回滚、配置加各节点运维归档恢复到全新数据库、会话失效及重放不重复。基础存储与内部流协议不变。本地队列故障、JSON/SQLite 回归和真实旧版本文件兼容已验证；远端验收与发布包以最终提交的 CI/产物为准。目标宿主机、数据库切换、外部 LB/TLS 与生产 SLO 仍需部署验收。

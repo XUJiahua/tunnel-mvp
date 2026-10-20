@@ -128,7 +128,7 @@ func validateMonitorArchive(path string) error {
 			return fmt.Errorf("monitoring archive contains invalid audit sources")
 		}
 	}
-	return nil
+	return validateObservationArchive(db)
 }
 func ExportOperations(dir, output string) (OperationsSummary, error) {
 	lock, err := lockExistingDir(dir)
@@ -460,4 +460,66 @@ func RestoreOperations(dir, input string) (OperationsSummary, error) {
 		return OperationsSummary{}, err
 	}
 	return operationSummary(m), nil
+}
+
+// Extension validation remains additive: HA-3 archives without these tables are
+// accepted; a present extension must be complete and internally consistent.
+func validateObservationArchive(db *sql.DB) error {
+	var exists int
+	if err := db.QueryRow(`SELECT count(*) FROM sqlite_master WHERE type='table' AND name LIKE 'observation_%'`).Scan(&exists); err != nil {
+		return err
+	}
+	if exists == 0 {
+		return nil
+	}
+	var version int
+	var source, node string
+	var buffered, errors int64
+	if err := db.QueryRow(`SELECT version,source,node_id,buffered_bytes,enqueue_errors FROM observation_local WHERE singleton=1`).Scan(&version, &source, &node, &buffered, &errors); err != nil {
+		return fmt.Errorf("invalid observation archive metadata: %w", err)
+	}
+	if version != ObservationVersion || !observationHex(source, 24) || !ValidClusterNodeID(node) || buffered < 0 || errors < 0 {
+		return ErrObservationSchema
+	}
+	var bytes int64
+	if err := db.QueryRow(`SELECT coalesce(sum(length(CAST(record AS BLOB))),0) FROM observation_queue`).Scan(&bytes); err != nil {
+		return err
+	}
+	if bytes != buffered {
+		return fmt.Errorf("observation archive byte counter mismatch")
+	}
+	rows, err := db.Query(`SELECT event_id,record FROM observation_queue ORDER BY seq`)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var id string
+		var raw []byte
+		if err = rows.Scan(&id, &raw); err != nil {
+			break
+		}
+		var o Observation
+		if err = json.Unmarshal(raw, &o); err != nil {
+			break
+		}
+		if !validObservation(o) || o.ID != id || o.Source != source || o.NodeID != node {
+			err = fmt.Errorf("invalid observation archive queue identity")
+			break
+		}
+	}
+	if err == nil {
+		err = rows.Err()
+	}
+	rows.Close()
+	if err != nil {
+		return err
+	}
+	for _, q := range []string{`SELECT event_id,epoch FROM observation_sample_identity LIMIT 0`, `SELECT event_id FROM observation_audit_identity LIMIT 0`} {
+		rows, err := db.Query(q)
+		if err != nil {
+			return err
+		}
+		rows.Close()
+	}
+	return nil
 }

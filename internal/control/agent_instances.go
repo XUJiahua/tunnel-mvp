@@ -371,7 +371,7 @@ func (s *Server) dialLocalGeneration(ctx context.Context, site, service, key str
 	s.tunnelMu.Lock()
 	c := s.connections[key]
 	s.tunnelMu.Unlock()
-	if c == nil || c.siteID != site || c.generation != generation || c.closing.Load() || s.cluster == nil || !s.cluster.valid() {
+	if c == nil || c.siteID != site || c.generation != generation || c.closing.Load() || s.cluster == nil || !s.cluster.valid() || s.cluster.draining.Load() {
 		return nil, state.ErrClusterLease
 	}
 	conn, err := s.tunnel.Dialer(c.key)(ctx, network, address)
@@ -380,7 +380,7 @@ func (s *Server) dialLocalGeneration(ctx context.Context, site, service, key str
 	}
 	s.tunnelMu.Lock()
 	current := s.connections[key]
-	valid := current == c && !c.closing.Load() && s.cluster.valid()
+	valid := current == c && !c.closing.Load() && s.cluster.valid() && !s.cluster.draining.Load()
 	s.tunnelMu.Unlock()
 	if !valid {
 		conn.Close()

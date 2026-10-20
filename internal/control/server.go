@@ -26,6 +26,7 @@ import (
 )
 
 type Server struct {
+	observer         *observationRuntime
 	cluster          *clusterRuntime
 	nodeID           string
 	storageFenced    atomic.Bool
@@ -157,6 +158,11 @@ func newServer(c config.Server, password string, repository state.Repository) (*
 		_ = st.Close()
 		return nil, err
 	}
+	if err := s.prepareObservations(); err != nil {
+		af.Close()
+		st.Close()
+		return nil, err
+	}
 	if err := s.configureCluster(); err != nil {
 		af.Close()
 		st.Close()
@@ -239,7 +245,16 @@ func (s *Server) audit(event, user, site, resource string, fields ...map[string]
 			entry[key] = value
 		}
 	}
+	if s.observer != nil {
+		entry["eventID"] = digest(randomID())
+		entry["nodeID"] = s.cfg.Cluster.NodeID
+		entry["nodeEpoch"] = s.cluster.node.Epoch
+		entry["sourceID"] = s.history.observer.Source
+	}
 	err := json.NewEncoder(s.auditFile).Encode(entry)
+	if err == nil && s.observer != nil {
+		err = s.auditFile.Sync()
+	}
 	if err != nil {
 		s.history.auditDirty.Store(true)
 		s.stats.auditIndexErrors.Add(1)
@@ -251,6 +266,7 @@ func (s *Server) audit(event, user, site, resource string, fields ...map[string]
 	if err = s.history.indexAudit(raw); err != nil {
 		s.history.auditDirty.Store(true)
 		s.stats.auditIndexErrors.Add(1)
+		s.history.observationError()
 		slog.Error("audit index write failed", "error", err)
 	}
 }
@@ -282,6 +298,8 @@ func (s *Server) Run(ctx context.Context) error {
 }
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/cluster/status", s.require(false, s.clusterStatus))
+	mux.HandleFunc("POST /api/cluster/local/drain", s.require(true, s.drainCluster))
 	mux.HandleFunc("GET /api/sites/{id}/agents/{agentID}/policy", s.require(false, s.manageAgentPolicy))
 	mux.HandleFunc("PUT /api/sites/{id}/agents/{agentID}/policy", s.require(true, s.manageAgentPolicy))
 	mux.HandleFunc("GET /api/agents", s.require(false, s.listAgents))
@@ -371,6 +389,10 @@ func (s *Server) Handler() http.Handler {
 			return
 		}
 		if !strings.EqualFold(r.Host, s.public.Host) {
+			if s.cluster != nil && s.cluster.draining.Load() {
+				fail(w, 503, "node is draining")
+				return
+			}
 			s.gateway(w, r)
 			return
 		}
@@ -403,6 +425,10 @@ func (s *Server) Handler() http.Handler {
 			return
 		}
 		if r.URL.Path == "/healthz" {
+			if s.cluster != nil && s.cluster.draining.Load() {
+				fail(w, 503, "node is draining")
+				return
+			}
 			jsonOut(w, 200, map[string]string{"status": "ok"})
 			return
 		}
@@ -465,8 +491,8 @@ func (s *Server) connect(w http.ResponseWriter, r *http.Request) {
 	}
 	var generation uint64
 	if s.cluster != nil {
-		if !s.cluster.valid() {
-			fail(w, 503, "cluster unavailable")
+		if !s.cluster.valid() || s.cluster.draining.Load() {
+			fail(w, 503, "cluster unavailable or draining")
 			return
 		}
 		route, err := s.cluster.repo.ClusterClaimAgent(r.Context(), state.ClusterAgent{SiteID: siteID, InstanceID: instance, CredentialHash: digest(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")), RemoteIP: remote, Version: version, PolicyVersion: policyVersion})
@@ -486,7 +512,7 @@ func (s *Server) connect(w http.ResponseWriter, r *http.Request) {
 		}()
 	}
 	s.tunnelMu.Lock()
-	if s.closing || s.cluster != nil && !s.cluster.valid() {
+	if s.closing || s.cluster != nil && (!s.cluster.valid() || s.cluster.draining.Load()) {
 		s.tunnelMu.Unlock()
 		fail(w, 503, "server shutting down")
 		return

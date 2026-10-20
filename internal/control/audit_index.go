@@ -113,7 +113,29 @@ func (h *historyStore) indexAudit(raw []byte) error {
 	if !valid || len(raw) >= 128<<10 {
 		return fmt.Errorf("invalid or oversized audit record")
 	}
-	_, err := h.db.Exec(insertAuditSQL, append(values, h.auditSource.Load())...)
+	tx, err := h.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err = tx.Exec(insertAuditSQL, append(values, h.auditSource.Load())...); err != nil {
+		h.auditDirty.Store(true)
+		return err
+	}
+	if h.observer != nil {
+		o, e := h.observer.auditRecord(raw)
+		if e != nil {
+			return e
+		}
+		if o.ID == "" {
+			return fmt.Errorf("cluster audit event identity missing")
+		}
+		if err = h.observer.enqueue(tx, o); err != nil {
+			h.auditDirty.Store(true)
+			return err
+		}
+	}
+	err = tx.Commit()
 	if err != nil {
 		h.auditDirty.Store(true)
 	}
@@ -236,6 +258,9 @@ func (s *Server) rebuildAuditIndex() error {
 	s.history.auditSource.Store(activeSource)
 	s.history.auditSize.Store(activeSize)
 	s.history.auditDirty.Store(false)
+	if s.history.observer != nil {
+		s.history.auditReconcile.Store(true)
+	}
 	return nil
 }
 

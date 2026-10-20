@@ -31,12 +31,42 @@ jobs:
     env:
       TUNNEL_TEST_POSTGRES_DSN: postgres://postgres:tunnel-test-only@127.0.0.1:5432/postgres?sslmode=disable
       TUNNEL_REQUIRE_POSTGRES_TESTS: '1'
+      TUNNEL_REQUIRE_HA3_TESTS: '1'
+      TUNNEL_TEST_HA3_BINARY: /tmp/tunnel-ha3-binary
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version: '1.27.2'
           cache: true
+      - name: Build pinned HA-3 CLI for archive compatibility
+        run: |
+          git fetch --no-tags origin 29fcd9399507da008385fcd3136279c2d781a168
+          git worktree add --detach "$RUNNER_TEMP/tunnel-ha3-source" 29fcd9399507da008385fcd3136279c2d781a168
+          CGO_ENABLED=0 go -C "$RUNNER_TEMP/tunnel-ha3-source" build -trimpath -o "$TUNNEL_TEST_HA3_BINARY" ./cmd/tunnel
+          go test -race -count=1 -timeout=2m -v ./internal/control -run '^TestObservationJournal'
+      - name: HA-4 shared observations, authorization, durable replay and drain
+        run: go test -race -count=2 -timeout=4m -v ./internal/state ./internal/control -run '^TestPostgresCluster(Observation|SharedHealth)'
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: web/package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - run: make build
+      - run: pnpm exec playwright install --with-deps chromium
+        working-directory: web
+      - name: HA-4 real browser mixed-version rollout and fresh-database recovery
+        working-directory: web
+        env:
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+          TUNNEL_TEST_STORAGE: postgres
+          TUNNEL_POSTGRES_DSN: postgres://postgres:tunnel-test-only@127.0.0.1:5432/tunnel_browser_90?sslmode=disable
+        run: |
+          docker exec "$POSTGRES_CONTAINER" createdb -U postgres tunnel_browser_90
+          pnpm exec playwright test tests/cluster.spec.ts
       - name: HA-3 real cluster routing, partition and process-crash takeover
         run: go test -race -count=2 -timeout=4m -v ./internal/state ./internal/control -run '^TestPostgresCluster'
       - name: Shared-auth pool proof races and real connection reuse
@@ -47,21 +77,10 @@ jobs:
           TUNNEL_TEST_STORAGE=postgres go test -race -count=1 -timeout=2m ./internal/control -skip '^TestPostgresCluster' -run 'Postgres|TestRealTunnelProxyAndRevocation|TestOIDCStartupFailureReleasesStore'
           TUNNEL_TEST_STORAGE=postgres go test -race -count=1 -timeout=10m ./internal/control
 
-      - uses: pnpm/action-setup@v4
-        with:
-          package_json_file: web/package.json
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: pnpm
-          cache-dependency-path: web/pnpm-lock.yaml
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '21'
-      - run: make build
-      - run: pnpm exec playwright install --with-deps chromium
-        working-directory: web
       - run: bash scripts/prepare-keycloak-e2e.sh "$RUNNER_TEMP/tunnel-keycloak"
       - name: PostgreSQL browser and real Keycloak regression
         working-directory: web
@@ -71,6 +90,7 @@ jobs:
         run: |
           index=0
           for spec in tests/*.spec.ts; do
+            [ "$spec" = "tests/cluster.spec.ts" ] && continue
             index=$((index+1))
             database="tunnel_browser_${index}"
             docker exec "$POSTGRES_CONTAINER" createdb -U postgres "$database"

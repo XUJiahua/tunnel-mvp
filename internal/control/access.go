@@ -10,6 +10,7 @@ import (
 // accessMu orders credential/resource changes with authentication and live
 // request registration. It is never held while forwarding network traffic.
 type liveRequest struct {
+	relay                         bool
 	system                        bool
 	route                         Service
 	accessKey, method             string
@@ -60,7 +61,8 @@ func (s *Server) trackRequest(parent context.Context, u User, g grant, accessKey
 	if s.storageFenced.Load() {
 		cancel()
 	}
-	s.live[id] = liveRequest{userID: u.ID, sessionKey: g.SessionKey, serviceID: g.ServiceID, expires: expires, cancel: cancelRequest, accessKey: accessKey, method: resolution.Session.Method, lease: lease, route: route}
+	relay, _ := parent.Value(clusterRelayKey{}).(bool)
+	s.live[id] = liveRequest{relay: relay, userID: u.ID, sessionKey: g.SessionKey, serviceID: g.ServiceID, expires: expires, cancel: cancelRequest, accessKey: accessKey, method: resolution.Session.Method, lease: lease, route: route}
 	s.liveMu.Unlock()
 	return ctx, func() {
 		cancelRequest()

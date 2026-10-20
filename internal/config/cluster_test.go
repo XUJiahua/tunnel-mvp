@@ -11,7 +11,7 @@ func TestClusterExplicitPostgresAndPrivateTLS(t *testing.T) {
 		t.Fatal("cluster on SQLite")
 	}
 	for _, mutate := range []func(*Cluster){
-		func(c *Cluster) { c.Enabled = false }, func(c *Cluster) { c.NodeID = "../node" }, func(c *Cluster) { c.KeyFile = "" }, func(c *Cluster) { c.Listen = "8443" }, func(c *Cluster) { c.AdvertiseURL = "http://node-a.example" }, func(c *Cluster) { c.AdvertiseURL = "https://node-a.example/path" }, func(c *Cluster) { c.AdvertiseURL = "https://node-a.example?" },
+		func(c *Cluster) { c.ObservationBufferMB = 15 }, func(c *Cluster) { c.ObservationBufferMB = 2049 }, func(c *Cluster) { c.Enabled = false }, func(c *Cluster) { c.NodeID = "../node" }, func(c *Cluster) { c.KeyFile = "" }, func(c *Cluster) { c.Listen = "8443" }, func(c *Cluster) { c.AdvertiseURL = "http://node-a.example" }, func(c *Cluster) { c.AdvertiseURL = "https://node-a.example/path" }, func(c *Cluster) { c.AdvertiseURL = "https://node-a.example?" },
 	} {
 		c := good
 		mutate(&c)

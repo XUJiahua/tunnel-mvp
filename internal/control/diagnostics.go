@@ -11,6 +11,8 @@ import (
 )
 
 type probeReport struct {
+	NodeID    string `json:"nodeID,omitempty"`
+	NodeEpoch string `json:"nodeEpoch,omitempty"`
 	*diagnostics.Failure
 	Healthy   bool      `json:"healthy"`
 	Reachable bool      `json:"reachable"`

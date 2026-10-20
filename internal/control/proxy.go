@@ -339,6 +339,10 @@ func (s *Server) probe(w http.ResponseWriter, r *http.Request, u User) {
 }
 func (s *Server) checkService(parent context.Context, svc Service) probeReport {
 	report := newReport(svc)
+	if s.cluster != nil {
+		report.NodeID = s.cluster.node.ID
+		report.NodeEpoch = s.cluster.node.Epoch
+	}
 	start := time.Now()
 	defer func() { s.stats.probes.Add(1) }()
 	if !s.siteOnline(svc.SiteID) {

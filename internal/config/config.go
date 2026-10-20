@@ -48,6 +48,7 @@ type OIDC struct {
 	SessionMinutes int          `json:"sessionMinutes" mapstructure:"sessionMinutes"`
 }
 type Server struct {
+	RuntimeVersion       string  `json:"-" mapstructure:"-"`
 	Cluster              Cluster `json:"cluster" mapstructure:"cluster"`
 	OIDC                 OIDC    `json:"oidc" mapstructure:"oidc"`
 	Logging              `mapstructure:",squash"`

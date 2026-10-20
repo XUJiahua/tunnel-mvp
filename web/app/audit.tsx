@@ -2,6 +2,8 @@
 import { FormEvent, useEffect, useState } from "react";
 import { api, APIError } from "./api";
 type Entry = {
+  eventID?: string;
+  nodeID?: string;
   time: string;
   event: string;
   user: string;
@@ -10,6 +12,7 @@ type Entry = {
   diagnostic?: { code?: string; requestID?: string };
 };
 type Filters = {
+  nodeID: string;
   event: string;
   siteID: string;
   user: string;
@@ -17,12 +20,14 @@ type Filters = {
   since: string;
 };
 type Page = {
+  scope?: string;
   entries: Entry[];
   nextCursor?: string;
   indexedFiles?: number;
   skipped?: number;
 };
 const empty: Filters = {
+  nodeID: "",
   event: "",
   siteID: "",
   user: "",
@@ -34,6 +39,7 @@ export function AuditPanel() {
     [applied, setApplied] = useState<Filters>(empty),
     [entries, setEntries] = useState<Entry[]>([]),
     [cursor, setCursor] = useState("");
+  const [cluster, setCluster] = useState(false);
   const [files, setFiles] = useState(0),
     [skipped, setSkipped] = useState(0),
     [error, setError] = useState(""),
@@ -58,6 +64,7 @@ export function AuditPanel() {
         more ? [...previous, ...result.entries] : result.entries,
       );
       setCursor(result.nextCursor || "");
+      setCluster(result.scope === "cluster");
       setFiles(result.indexedFiles || 0);
       setSkipped(result.skipped || 0);
       if (!more) setApplied(filters);
@@ -90,6 +97,7 @@ export function AuditPanel() {
   return (
     <>
       <form className="audit-filters" onSubmit={submit}>
+        {cluster && input("nodeID", "来源节点")}
         {input("event", "事件类型")}
         {input("siteID", "站点 ID")}
         {input("user", "操作者")}
@@ -100,8 +108,8 @@ export function AuditPanel() {
         </button>
       </form>
       <p className="muted small">
-        查询当前和全部保留轮转文件，按记录追加顺序倒序。每页 100
-        条，可加载更早记录。{files ? `已索引 ${files} 个文件。` : ""}
+        {cluster ? "查询已汇聚的集群审计，按接收顺序倒序。待汇聚记录稍后可见。" : "查询当前和全部保留轮转文件，按记录追加顺序倒序。"}
+        每页 100 条，可加载更早记录。{files ? `已索引 ${files} 个文件。` : ""}
       </p>
       {skipped > 0 && (
         <p className="form-error" role="alert">
@@ -119,6 +127,7 @@ export function AuditPanel() {
             <tr>
               <th>时间</th>
               <th>事件</th>
+              {cluster && <th>来源节点</th>}
               <th>操作者</th>
               <th>站点 / 资源</th>
               <th>诊断</th>
@@ -126,7 +135,7 @@ export function AuditPanel() {
           </thead>
           <tbody>
             {entries.map((entry, i) => (
-              <tr key={i}>
+              <tr key={entry.eventID || i}>
                 <td>
                   {entry.time
                     ? new Date(entry.time).toLocaleString()
@@ -135,6 +144,7 @@ export function AuditPanel() {
                 <td>
                   <code>{entry.event}</code>
                 </td>
+                {cluster && <td><code>{entry.nodeID || "未知来源"}</code></td>}
                 <td>{entry.user || "Agent"}</td>
                 <td>
                   <code>{entry.siteID || "—"}</code>
