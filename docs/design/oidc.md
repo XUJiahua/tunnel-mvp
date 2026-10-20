@@ -22,7 +22,7 @@
 - Authorization Code Flow，`client_secret_basic`，scope 仅 `openid`。不请求 refresh token、offline_access 或用户资料接口。
 - 回调固定为配置的 `publicURL + /auth/oidc/callback`；不从请求 Host、Forwarded 或 return URL 推导目的地。
 - 每次请求生成独立 state、nonce、PKCE S256 verifier，以及浏览器绑定 Cookie。Cookie 是 host-only、HttpOnly、SameSite=Lax，HTTPS 时启用 Secure，路径限定 `/auth/oidc`。
-- pending flow 仅存内存、5 分钟有效，最多 256 条；清理过期项后仍满则返回 429。浏览器中的单个 flow Cookie 意味着并行发起登录时，以最新一次为准。
+- pending flow 在 JSON/SQLite 内存或 PostgreSQL 私有认证表保存，5 分钟有效，最多 256 条；清理过期项后仍满则返回 429。浏览器中的单个 flow Cookie 意味着并行发起登录时，以最新一次为准。
 - 回调同时匹配 state 和浏览器 Cookie，在交换代码之前原子消费 flow。重复回调、跨浏览器回调、过期 state、IdP error 都不签发会话。
 - 校验 PKCE、JWKS 签名、Issuer、Audience、Expiry、nonce、非空 Subject，以及多 Audience/已声明的 authorized party (`azp`)。不信任 email/roles/groups。
 - 网络请求超时 10 秒，校验证书；配置、Discovery 和 HTTP 重定向只接受 HTTPS，HTTP 仅供 localhost/loopback 开发。Issuer 可包含 realm 路径，但不允许查询、fragment 或 URL 凭据。
@@ -42,7 +42,7 @@ OIDC 会话到期时间为 `min(ID Token exp, 登录完成时间 + oidc.sessionM
 | 禁用、启用或修改身份绑定 | 持久化成功后删除该成员全部本地会话与票据，关闭现有代理连接；启用后须重新登录 |
 | 禁用成员重新进行 OIDC/密码登录 | 拒绝，不创建新会话 |
 | 收回应用权限 | 沿用前批逻辑，关闭失去权限的应用请求 |
-| Server 重启 | 清空本地会话和 pending flow，重新登录 |
+| Server 重启 | JSON/SQLite 清空会话和 pending flow；PostgreSQL 正常重启保留未到期记录 |
 
 本地退出不会清理 IdP SSO Cookie。再次点击统一登录时，IdP 可能无需输入密码。第四批增加 RP 主动退出、back-channel logout 和可选 acr/amr 策略，见 [会话生命周期设计](session-lifecycle.md)。仍未提供令牌 introspection、SCIM 或完整 IdP 禁用事件同步。因此仅在 IdP 禁用用户，不会立即撤销已建立的本地会话；紧急回收必须同时在控制台禁用成员。MFA 由 IdP 执行；第四批可配置可信 ID Token 的 acr/amr 要求。
 
@@ -77,3 +77,5 @@ JSON 字段均可选，旧数据无需改写即可读取。新导出使用 `tunn
 - 第三批提供 Keycloak 接入步骤及测试 IdP；第四批补真实 Keycloak/OTP/Agent/退出通知端到端验收。该验收不等于生产安全审计。
 
 参考：[go-oidc](https://github.com/coreos/go-oidc/tree/v3.19.0)、[oauth2 PKCE](https://pkg.go.dev/golang.org/x/oauth2@v0.36.0)、[OpenID Connect Core](https://openid.net/specs/openid-connect-core-1_0.html)、[Keycloak OIDC](https://www.keycloak.org/securing-apps/oidc-layers)。
+
+PostgreSQL 的 state 消费、会话签发和注销 cutoff 在数据库锁内重新检查身份与配置，能够跨两个独立客户端完成。身份状态桥接使用共享 epoch，详细一致性和失效边界见 [HA-2](shared-authentication.md)。

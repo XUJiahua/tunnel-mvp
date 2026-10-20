@@ -4,7 +4,7 @@
 
 当前授权存储使用 SQLite schema v10、backup v10，继续读取 backup v1–v9。已有 SQLite v1–v9 首次被 Server、inspect 或 export 打开时会事务升级；**先用支持 storage 的旧二进制导出，并备份停机目录，再换程序**。v0.1.1 没有 storage 命令，使用 [专项升级手册](upgrade-v0.1.1.md) 的整目录备份流程。失败不会留下部分 schema。回滚须使用升级前备份。详见 [OIDC 升级手册](oidc-operations.md)。
 
-PostgreSQL 是新增的单活数据库后端，独立 schema v1 / 同一授权模型 v10；新部署、JSON/SQLite 迁移、三后端恢复与异常运行标记见 [PostgreSQL 手册](postgres-operations.md)。本页后续命令主要说明本地 JSON/SQLite。
+PostgreSQL 是新增的单活数据库后端，独立 schema v2（事务升级 v1）/ 同一授权模型 v10；新部署、JSON/SQLite 迁移、三后端恢复与异常运行标记见 [PostgreSQL 手册](postgres-operations.md)。本页后续命令主要说明本地 JSON/SQLite。
 
 ## 1. 选择后端
 
@@ -46,7 +46,7 @@ mkdir -p backups
 
 随后把实际 Server 配置改为 `"storage": "sqlite"`，保持原来的 `dataDir`、publicURL 和 accessURL，运行 `--check-config` 后启动。也可用 `--storage sqlite` 或环境变量覆盖。Compose 已支持可选的 `TUNNEL_STORAGE` 环境变量。
 
-验收：管理员及成员均能用原密码登录；原站点 Agent 用原令牌自动重连；应用 ID/公网访问域名不变；单独应用授权仍无法访问兄弟应用；重新签发应用访问票据后打开服务。Server 重启必然清空内存会话，需要重新登录。
+验收：管理员及成员均能用原密码登录；原站点 Agent 用原令牌自动重连；应用 ID/公网访问域名不变；单独应用授权仍无法访问兄弟应用；重新签发应用访问票据后打开服务。本地 JSON/SQLite 重启清空内存会话；PostgreSQL 正常重启保留未到期认证，portable restore 仍要求重新登录。
 
 迁移后不要再启动 JSON 模式，程序会因存在 `state.db` 拒绝。保留的 `state.json` 是迁移时的旧副本，不会继续更新。migrate 重跑会拒绝覆盖，不能作为同步工具。
 
