@@ -27,8 +27,8 @@ jobs:
       - name: Verify directory conflict recovery before the full regression
         working-directory: web
         run: |
-          pnpm run test:e2e -- directory.spec.ts
-          TUNNEL_TEST_STORAGE=sqlite pnpm run test:e2e -- directory.spec.ts
+          pnpm exec playwright test tests/directory.spec.ts
+          TUNNEL_TEST_STORAGE=sqlite pnpm exec playwright test tests/directory.spec.ts
       - run: make test
       - name: Verify published v0.1.1 upgrade and rollback
         run: bash scripts/verify-upgrade.sh bin/tunnel "$RUNNER_TEMP/tunnel-upgrade"

@@ -28,8 +28,8 @@ go test -race ./internal/control -run 'TestDirectory|TestUserQuery'
 go test ./internal/state -run '^$' -bench BenchmarkStorageQueries -benchtime=500ms -count=3
 cd web
 pnpm run test:unit
-pnpm run test:e2e -- directory.spec.ts
-TUNNEL_TEST_STORAGE=sqlite pnpm run test:e2e -- directory.spec.ts
+pnpm exec playwright test tests/directory.spec.ts
+TUNNEL_TEST_STORAGE=sqlite pnpm exec playwright test tests/directory.spec.ts
 ```
 
 完整交付继续执行 make build/test、双后端浏览器、双后端原生 Keycloak、真实 v0.1.1 升级/回退及六平台包验证。原始基准与边界见 [设计](design/storage-queries.md)，本批实际 CI 结果记录在 PR 中。
