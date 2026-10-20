@@ -310,6 +310,13 @@ func TestPostgresSharedAuthRejectsRevokedActorBeforeMutation(t *testing.T) {
 	}
 	gate := &authWriteGate{entered: make(chan struct{}), release: make(chan struct{})}
 	replica.writeGate.Store(gate)
+	defer func() {
+		select {
+		case <-gate.release:
+		default:
+			close(gate.release)
+		}
+	}()
 	req, _ := http.NewRequest("POST", f.h.URL+"/api/sites", strings.NewReader(`{"name":"must-not-commit"}`))
 	req.Header.Set("Origin", f.h.URL)
 	req.Header.Set("Content-Type", "application/json")

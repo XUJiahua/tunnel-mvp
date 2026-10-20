@@ -418,3 +418,72 @@ func TestPostgresOutboxRetentionKeepsDurableWatermark(t *testing.T) {
 		t.Fatal("resnapshot did not repair retention gap", err)
 	}
 }
+
+func TestPostgresAuthRestartAndAuthorizationRevision(t *testing.T) {
+	ctx := context.Background()
+	dsn := testpostgres.Database(t)
+	dir := t.TempDir()
+	initial := sample(t)
+	p, err := OpenPostgresRuntime(ctx, dir, dsn, func() (State, error) { return initial, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := strings.Repeat("e", 64)
+	if err = p.AuthBindPolicy(ctx, policy); err != nil {
+		t.Fatal(err)
+	}
+	seedPostgresAuth(t, p)
+	if err = p.AuthUpdate(ctx, false, func(a *AuthData, _ State, now time.Time) error {
+		a.Pending[strings.Repeat("8", 64)] = AuthOIDCAttempt{Browser: strings.Repeat("9", 64), Nonce: "nonce", Verifier: "verifier", Issuer: "https://idp.example", ClientID: "console", RedirectURI: "https://console.example/auth/oidc/callback", Started: now, Expires: now.Add(5 * time.Minute)}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err = p.Close(); err != nil {
+		t.Fatal(err)
+	}
+	p, err = OpenPostgresRuntime(ctx, dir, dsn, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	if err = p.AuthBindPolicy(ctx, policy); err != nil {
+		t.Fatal(err)
+	}
+	resolution, err := p.AuthResolve(ctx, "session", authSessionKey)
+	if err != nil || !resolution.Found {
+		t.Fatal("normal restart discarded session", err)
+	}
+	snapshot, err := p.AuthSnapshot(ctx, false)
+	if err != nil || len(snapshot.Data.Pending) != 1 || len(snapshot.Data.Tickets) != 1 {
+		t.Fatal("normal restart discarded pending authentication", err)
+	}
+	query := DirectoryQuery{Kind: "services", Filter: DirectoryFilter{Global: true, ExpectedRevision: &resolution.ConfigRevision}}
+	if _, err = p.Directory(query); err != nil {
+		t.Fatal(err)
+	}
+	if err = p.Update(func(s *State) error { s.Sites[0].Name = "new metadata"; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = p.Directory(query); !errors.Is(err, ErrDirectoryChanged) {
+		t.Fatal("stale authorization scope used against new revision", err)
+	}
+	if err = p.Close(); err != nil {
+		t.Fatal(err)
+	}
+	p, err = OpenPostgresRuntime(ctx, dir, dsn, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	if err = p.AuthBindPolicy(ctx, strings.Repeat("a", 64)); err != nil {
+		t.Fatal(err)
+	}
+	if resolution, err = p.AuthResolve(ctx, "session", authSessionKey); err != nil || resolution.Found {
+		t.Fatal("policy change preserved old session", err)
+	}
+	snapshot, err = p.AuthSnapshot(ctx, false)
+	if err != nil || len(snapshot.Data.Pending) != 0 {
+		t.Fatal("policy change preserved old OIDC attempt", err)
+	}
+}

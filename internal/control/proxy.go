@@ -75,7 +75,7 @@ func (s *Server) launch(w http.ResponseWriter, r *http.Request, u User) {
 		if sess.Expires.Before(expires) {
 			expires = sess.Expires
 		}
-		a.Tickets[digest(token)] = grant{key, svc.ID, expires}
+		a.Tickets[digest(token)] = grant{SessionKey: key, ServiceID: svc.ID, Expires: expires}
 		return nil
 	})
 	if err != nil {

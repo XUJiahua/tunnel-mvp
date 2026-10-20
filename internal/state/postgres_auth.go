@@ -138,7 +138,7 @@ func (p *PostgresRepository) AuthUpdate(ctx context.Context, withConfig bool, fn
 		if !withConfig {
 			for k, v := range data.Sessions {
 				old, ok := before.Sessions[k]
-				if !ok || old.UserID != v.UserID || old.Method != v.Method || old.Issuer != v.Issuer || old.Subject != v.Subject || old.SID != v.SID || old.ID != v.ID || !old.Expires.Equal(v.Expires) {
+				if !ok || old.UserID != v.UserID || old.Method != v.Method || old.Issuer != v.Issuer || old.Subject != v.Subject || old.SID != v.SID || old.IdentityEpoch != v.IdentityEpoch || old.ID != v.ID || !old.Expires.Equal(v.Expires) {
 					return fmt.Errorf("session issuance requires transactional configuration")
 				}
 			}

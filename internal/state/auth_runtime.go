@@ -236,7 +236,7 @@ func validateAuth(a AuthData, now time.Time) error {
 }
 func authRevoked(before, after AuthData) bool {
 	for key, s := range before.Sessions {
-		if next, ok := after.Sessions[key]; !ok || s.ID != next.ID || s.UserID != next.UserID || s.Method != next.Method || s.Issuer != next.Issuer || s.Subject != next.Subject || s.SID != next.SID || !s.Expires.Equal(next.Expires) {
+		if next, ok := after.Sessions[key]; !ok || s.ID != next.ID || s.UserID != next.UserID || s.Method != next.Method || s.Issuer != next.Issuer || s.Subject != next.Subject || s.SID != next.SID || s.IdentityEpoch != next.IdentityEpoch || !s.Expires.Equal(next.Expires) {
 			return true
 		}
 	}
@@ -253,9 +253,24 @@ func authReconcile(a *AuthData, before, after State, now time.Time) {
 		users[u.ID] = u
 	}
 	changed := map[string]bool{}
+	roles := map[string]Role{}
+	for _, role := range after.Roles {
+		roles[role.ID] = role
+	}
+	changedRoles := map[string]bool{}
+	for _, role := range before.Roles {
+		next, ok := roles[role.ID]
+		if !ok || !reflect.DeepEqual(role, next) {
+			changedRoles[role.ID] = true
+		}
+	}
 	for _, u := range before.Users {
 		next, ok := users[u.ID]
-		if !ok || !reflect.DeepEqual(u, next) {
+		// Direct/group grants are additive. Preserve the device while every
+		// request/flow re-proves access; security and role edits revoke it.
+		u.SiteIDs, u.ServiceIDs = nil, nil
+		next.SiteIDs, next.ServiceIDs = nil, nil
+		if !ok || !reflect.DeepEqual(u, next) || changedRoles[u.RoleID] {
 			changed[u.ID] = true
 		}
 	}

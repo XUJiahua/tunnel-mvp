@@ -168,7 +168,14 @@ test("retained audit search, pagination, scoped privacy and restart cursor inval
   await stop();
   start();
   await ready();
-  await login(page, "admin", password);
+  if (process.env.TUNNEL_TEST_STORAGE === "postgres") {
+    // Shared sessions survive a normal restart; audit cursors still change epoch.
+    await page.goto(url);
+    await expect(page.locator(".profile")).toContainText("admin");
+    expect((await page.request.get(url + "/api/me")).status()).toBe(200);
+  } else {
+    await login(page, "admin", password);
+  }
   expect(
     (
       await page.request.get(
