@@ -19,6 +19,7 @@ import (
 
 var ErrPostgresBusy = errors.New("PostgreSQL database is in use")
 var ErrPostgresRecovery = errors.New("previous control plane did not release PostgreSQL; stop the old Server and recover its runtime lease")
+var ErrPostgresSchema = errors.New("unsupported PostgreSQL schema/model; use a compatible binary or restore into a fresh database")
 var ErrPostgresUnavailable = errors.New("PostgreSQL repository unavailable")
 var ErrRevisionConflict = errors.New("configuration revision changed; rebuild the transaction from fresh state")
 
@@ -73,7 +74,7 @@ func pgSafeError(err error) error {
 	if err == nil {
 		return nil
 	}
-	if errors.Is(err, ErrRevisionConflict) || errors.Is(err, ErrPostgresBusy) || errors.Is(err, ErrPostgresRecovery) || errors.Is(err, ErrDirectoryChanged) || errors.Is(err, ErrDirectoryQuery) {
+	if errors.Is(err, ErrRevisionConflict) || errors.Is(err, ErrPostgresBusy) || errors.Is(err, ErrPostgresRecovery) || errors.Is(err, ErrPostgresSchema) || errors.Is(err, ErrDirectoryChanged) || errors.Is(err, ErrDirectoryQuery) {
 		return err
 	}
 	var pg *pq.Error
@@ -207,7 +208,7 @@ func pgReadMeta(ctx context.Context, tx *sql.Tx, lock string) (pgMetadata, error
 		return m, err
 	}
 	if version != PostgresSchemaVersion || model != SchemaVersion || revision < 0 || len(m.InstanceID) != 32 {
-		return m, fmt.Errorf("unsupported PostgreSQL schema")
+		return m, ErrPostgresSchema
 	}
 	m.Revision = uint64(revision)
 	return m, nil

@@ -203,18 +203,13 @@ func MigratePostgres(ctx context.Context, sourceDir, kind, targetDir, dsn string
 		if err = rejectSidecars(sourceDir); err != nil {
 			return Summary{}, err
 		}
-		var raw []byte
-		raw, err = os.ReadFile(filepath.Join(sourceDir, "state.db"))
-		if err != nil {
-			return Summary{}, err
-		}
 		tempDir, e := os.MkdirTemp("", "tunnel-postgres-migrate-")
 		if e != nil {
 			return Summary{}, e
 		}
 		defer os.RemoveAll(tempDir)
 		copyPath := filepath.Join(tempDir, "state.db")
-		if err = os.WriteFile(copyPath, raw, 0600); err != nil {
+		if err = copyPostgresSource(filepath.Join(sourceDir, "state.db"), copyPath); err != nil {
 			return Summary{}, err
 		}
 		var b backend
@@ -289,4 +284,23 @@ func RecoverPostgresRuntime(ctx context.Context, dir, dsn string, oldServerStopp
 		return Summary{}, err
 	}
 	return summarize(Postgres, s.State), nil
+}
+
+// Copy database pages with bounded memory; schema repair only touches this copy.
+func copyPostgresSource(source, target string) error {
+	in, err := os.Open(source)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if err != nil {
+		return err
+	}
+	_, copyErr := io.Copy(out, in)
+	closeErr := out.Close()
+	if copyErr != nil {
+		return copyErr
+	}
+	return closeErr
 }
