@@ -9,6 +9,7 @@ RUN pnpm run build
 FROM golang:1.27.2-alpine AS backend
 WORKDIR /src
 COPY go.mod go.sum ./
+COPY third_party/remotedialer/ third_party/remotedialer/
 RUN go mod download
 COPY cmd/ cmd/
 COPY internal/ internal/

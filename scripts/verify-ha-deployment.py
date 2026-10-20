@@ -426,6 +426,7 @@ def main():
         if args.report:
             args.report.parent.mkdir(parents=True, exist_ok=True)
             args.report.write_text(json.dumps(report, indent=2) + "\n")
+        print(json.dumps(report, indent=2), flush=True)
     if not report["passed"]:
         sys.exit(1)
 
