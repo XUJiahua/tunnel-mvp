@@ -30,6 +30,7 @@ type clusterRuntime struct {
 	ctx        context.Context
 	cancel     context.CancelFunc
 	stopping   atomic.Bool
+	draining   atomic.Bool
 	listener   net.Listener
 	http       *http.Server
 	wg         sync.WaitGroup
@@ -153,7 +154,7 @@ func (c *clusterRuntime) heartbeat(ctx context.Context) {
 	}
 	c.server.tunnelMu.Unlock()
 	for i := range reports {
-		reports[i].Ready = c.server.tunnel.HasSession(captured[reports[i].Key].key)
+		reports[i].Ready = !c.draining.Load() && c.server.tunnel.HasSession(captured[reports[i].Key].key)
 	}
 	started := time.Now()
 	readCtx, cancel := context.WithTimeout(ctx, 2*time.Second)

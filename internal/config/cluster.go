@@ -9,21 +9,25 @@ import (
 )
 
 type Cluster struct {
-	Enabled      bool   `json:"enabled" mapstructure:"enabled"`
-	NodeID       string `json:"nodeID" mapstructure:"nodeID"`
-	Listen       string `json:"listen" mapstructure:"listen"`
-	AdvertiseURL string `json:"advertiseURL" mapstructure:"advertiseURL"`
-	CAFile       string `json:"caFile" mapstructure:"caFile"`
-	CertFile     string `json:"certFile" mapstructure:"certFile"`
-	KeyFile      string `json:"keyFile" mapstructure:"keyFile"`
+	ObservationBufferMB int    `json:"observationBufferMB,omitempty" mapstructure:"observationBufferMB"`
+	Enabled             bool   `json:"enabled" mapstructure:"enabled"`
+	NodeID              string `json:"nodeID" mapstructure:"nodeID"`
+	Listen              string `json:"listen" mapstructure:"listen"`
+	AdvertiseURL        string `json:"advertiseURL" mapstructure:"advertiseURL"`
+	CAFile              string `json:"caFile" mapstructure:"caFile"`
+	CertFile            string `json:"certFile" mapstructure:"certFile"`
+	KeyFile             string `json:"keyFile" mapstructure:"keyFile"`
 }
 
 func (c *Cluster) validate(storage string) error {
 	if !c.Enabled {
-		if c.NodeID != "" || c.Listen != "" || c.AdvertiseURL != "" || c.CAFile != "" || c.CertFile != "" || c.KeyFile != "" {
+		if c.ObservationBufferMB != 0 || c.NodeID != "" || c.Listen != "" || c.AdvertiseURL != "" || c.CAFile != "" || c.CertFile != "" || c.KeyFile != "" {
 			return fmt.Errorf("cluster fields require cluster.enabled")
 		}
 		return nil
+	}
+	if c.ObservationBufferMB != 0 && (c.ObservationBufferMB < 16 || c.ObservationBufferMB > 2048) {
+		return fmt.Errorf("cluster observation buffer must be 16–2048 MiB")
 	}
 	if storage != state.Postgres {
 		return fmt.Errorf("cluster requires PostgreSQL")

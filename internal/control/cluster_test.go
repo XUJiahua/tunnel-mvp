@@ -30,7 +30,8 @@ import (
 
 type partitionedClusterRepository struct {
 	*state.PostgresRepository
-	blocked atomic.Bool
+	blocked               atomic.Bool
+	lostObservationCommit atomic.Bool
 }
 
 func (p *partitionedClusterRepository) ClusterHeartbeat(ctx context.Context, reports []state.ClusterAgent) (state.ClusterSnapshot, error) {
@@ -46,6 +47,18 @@ func (p *partitionedClusterRepository) ClusterReleaseAgent(ctx context.Context, 
 		return context.DeadlineExceeded
 	}
 	return p.PostgresRepository.ClusterReleaseAgent(ctx, key, generation)
+}
+
+// Simulate a lost commit response, after a real database transaction committed.
+func (p *partitionedClusterRepository) ObservationPublish(ctx context.Context, records []state.Observation) error {
+	err := p.PostgresRepository.ObservationPublish(ctx, records)
+	if err != nil {
+		return err
+	}
+	if p.lostObservationCommit.Swap(false) {
+		return context.DeadlineExceeded
+	}
+	return nil
 }
 
 type clusterFixture struct {

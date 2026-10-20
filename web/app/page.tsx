@@ -11,6 +11,7 @@ import {
 
 import { AgentsPanel } from "./agents";
 import { MonitoringHistory } from "./history";
+import { ClusterPanel } from "./cluster";
 import { BulkApplications } from "./bulk";
 import { OrganizationsPanel } from "./organizations";
 import { AdministratorsPanel } from "./administrators";
@@ -1135,12 +1136,15 @@ export default function Home() {
             />
           )}
           {tab === "history" && (
+            <>
+            {root && <ClusterPanel />}
             <MonitoringHistory
               services={services.filter(
                 (s) =>
                   s.accessible !== false || permitted("applications:manage"),
               )}
             />
+            </>
           )}
           {tab === "sessions" && (
             <SessionsPanel admin={!!root} onExpired={sessionExpired} />

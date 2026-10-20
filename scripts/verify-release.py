@@ -56,6 +56,7 @@ def verify(directory: Path, version: str | None = None) -> None:
         'docs/design/user-queries.md', 'docs/user-query-operations.md', 'docs/capacity/user-queries.txt',
         'docs/design/resource-queries.md', 'docs/resource-query-operations.md', 'docs/capacity/resource-queries.txt',
         'docs/design/control-plane-ha.md', 'docs/ha-operations.md', 'docs/e2e-acceptance.md',
+        'docs/design/cluster-observations.md',
         'examples/oidc-app/README.md', 'examples/oidc-app/app.go',
         'examples/oidc-app/main.go', 'examples/oidc-app/go.mod', 'examples/oidc-app/go.sum',
     })

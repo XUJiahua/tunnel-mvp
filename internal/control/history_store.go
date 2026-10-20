@@ -21,12 +21,17 @@ const historyGlobal = 100000
 const monitorApplicationID = 0x544d4f4e
 
 type historyStore struct {
-	db          *sql.DB
-	auditDirty  atomic.Bool
-	auditSource atomic.Int64
-	auditSize   atomic.Int64
+	observer       *observationJournal
+	db             *sql.DB
+	auditDirty     atomic.Bool
+	auditReconcile atomic.Bool
+	auditSource    atomic.Int64
+	auditSize      atomic.Int64
 }
 type healthSample struct {
+	EventID   string    `json:"eventID,omitempty"`
+	NodeID    string    `json:"nodeID,omitempty"`
+	NodeEpoch string    `json:"nodeEpoch,omitempty"`
 	CheckedAt time.Time `json:"checkedAt"`
 	Reachable bool      `json:"reachable"`
 	Healthy   bool      `json:"healthy"`
@@ -139,8 +144,23 @@ func (h *historyStore) save(svc Service, p probeReport) error {
 	if p.Failure != nil {
 		code, stage = p.Code, p.Stage
 	}
-	if _, err = tx.Exec("INSERT INTO samples(service_id,profile,checked_at,reachable,healthy,status,latency_ms,request_id,code,stage) VALUES(?,?,?,?,?,?,?,?,?,?)", svc.ID, healthProfile(svc), p.CheckedAt.UTC().Format(historyTimeLayout), p.Reachable, p.Healthy, p.Status, p.LatencyMs, p.RequestID, code, stage); err != nil {
+	result, err := tx.Exec("INSERT INTO samples(service_id,profile,checked_at,reachable,healthy,status,latency_ms,request_id,code,stage) VALUES(?,?,?,?,?,?,?,?,?,?)", svc.ID, healthProfile(svc), p.CheckedAt.UTC().Format(historyTimeLayout), p.Reachable, p.Healthy, p.Status, p.LatencyMs, p.RequestID, code, stage)
+	if err != nil {
 		return err
+	}
+	if h.observer != nil {
+		id, e := result.LastInsertId()
+		if e != nil {
+			return e
+		}
+		event := digest(randomID())
+		epoch := p.NodeEpoch
+		if _, err = tx.Exec(`INSERT INTO observation_sample_identity VALUES(?,?,?)`, id, event, epoch); err != nil {
+			return err
+		}
+		if err = h.observer.enqueueSample(tx, event, epoch, svc.ID, healthProfile(svc), healthSample{CheckedAt: p.CheckedAt, Reachable: p.Reachable, Healthy: p.Healthy, Status: p.Status, LatencyMs: p.LatencyMs, RequestID: p.RequestID, Code: code, Stage: stage}); err != nil {
+			return err
+		}
 	}
 	for _, command := range []struct {
 		sql  string

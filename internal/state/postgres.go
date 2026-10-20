@@ -76,7 +76,7 @@ func pgSafeError(err error) error {
 	if err == nil {
 		return nil
 	}
-	if errors.Is(err, ErrClusterLease) || errors.Is(err, ErrClusterBusy) || errors.Is(err, ErrAuthCapacity) || errors.Is(err, ErrAuthChanged) || errors.Is(err, ErrAuthPolicy) || errors.Is(err, ErrAuthUnavailable) || errors.Is(err, ErrRevisionConflict) || errors.Is(err, ErrPostgresBusy) || errors.Is(err, ErrPostgresRecovery) || errors.Is(err, ErrPostgresSchema) || errors.Is(err, ErrDirectoryChanged) || errors.Is(err, ErrDirectoryQuery) {
+	if errors.Is(err, ErrObservationSchema) || errors.Is(err, ErrObservationCursor) || errors.Is(err, ErrClusterLease) || errors.Is(err, ErrClusterBusy) || errors.Is(err, ErrAuthCapacity) || errors.Is(err, ErrAuthChanged) || errors.Is(err, ErrAuthPolicy) || errors.Is(err, ErrAuthUnavailable) || errors.Is(err, ErrRevisionConflict) || errors.Is(err, ErrPostgresBusy) || errors.Is(err, ErrPostgresRecovery) || errors.Is(err, ErrPostgresSchema) || errors.Is(err, ErrDirectoryChanged) || errors.Is(err, ErrDirectoryQuery) {
 		return err
 	}
 	var pg *pq.Error
@@ -187,6 +187,11 @@ func openPostgres(ctx context.Context, dsn string, options pgOpenOptions) (*Post
 			if _, err = tx.ExecContext(ctx, `UPDATE tunnel_state.meta SET schema_version=$1,revision=revision+1 WHERE singleton`, PostgresSchemaVersion); err != nil {
 				return nil, pgSafeError(err)
 			}
+		}
+	}
+	if options.cluster {
+		if err = pgCreateObservationSchema(ctx, tx); err != nil {
+			return nil, pgSafeError(err)
 		}
 	}
 	meta, err := pgReadMeta(ctx, tx, " FOR SHARE")

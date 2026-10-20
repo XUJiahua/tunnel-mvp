@@ -64,9 +64,19 @@ func (s *Server) serviceHistory(w http.ResponseWriter, r *http.Request, u User) 
 			since = value
 		}
 	}
-	rows, err := s.history.samples(svc, since, limit)
+	var rows []healthSample
+	var err error
+	if s.observer != nil {
+		rows, err = s.clusterSamples(r, svc.ID, since, limit)
+	} else {
+		rows, err = s.history.samples(svc, since, limit)
+	}
 	if err != nil {
-		fail(w, 500, "could not read monitoring history")
+		if s.observer != nil {
+			fail(w, 503, "cluster history unavailable or authorization changed")
+		} else {
+			fail(w, 500, "could not read monitoring history")
+		}
 		return
 	}
 	jsonOut(w, 200, map[string]any{"serviceID": svc.ID, "samples": rows, "retentionHours": int(historyRetention.Hours()), "maxSamples": historyPerService, "probeIntervalSeconds": s.cfg.ProbeIntervalSeconds})

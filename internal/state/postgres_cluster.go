@@ -155,7 +155,7 @@ func (p *PostgresRepository) ClusterHeartbeat(ctx context.Context, reports []Clu
 			if a.Channels < 0 {
 				return ErrClusterLease
 			}
-			if _, err := tx.ExecContext(ctx, `UPDATE tunnel_state.cluster_agents SET channels=$1,ready=$6 WHERE agent_key=$2 AND generation=$3 AND owner_id=$4 AND owner_epoch=$5`, a.Channels, a.Key, int64(a.Generation), p.nodeID, p.nodeEpoch, a.Ready); err != nil {
+			if _, err := tx.ExecContext(ctx, `UPDATE tunnel_state.cluster_agents SET channels=$1,ready=$6 AND NOT coalesce((SELECT draining FROM tunnel_state.node_observations WHERE node_id=$4 AND epoch=$5),false) WHERE agent_key=$2 AND generation=$3 AND owner_id=$4 AND owner_epoch=$5`, a.Channels, a.Key, int64(a.Generation), p.nodeID, p.nodeEpoch, a.Ready); err != nil {
 				return err
 			}
 		}
@@ -204,6 +204,14 @@ func (p *PostgresRepository) ClusterClaimAgent(ctx context.Context, a ClusterAge
 	}
 	var out ClusterRoute
 	err := p.authWrite(ctx, func(ctx context.Context, tx *sql.Tx, _ pgMetadata, now time.Time) error {
+		var draining bool
+		if err := tx.QueryRowContext(ctx, `SELECT coalesce((SELECT draining FROM tunnel_state.node_observations WHERE node_id=$1 AND epoch=$2),false)`, p.nodeID, p.nodeEpoch).Scan(&draining); err != nil {
+			return err
+		}
+		if draining {
+			return ErrClusterBusy
+		}
+
 		v, found, err := pgOne(ctx, tx, "sites", "id=$1", a.SiteID)
 		if err != nil {
 			return err

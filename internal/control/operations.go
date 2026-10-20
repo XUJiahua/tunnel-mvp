@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/XUJiahua/tunnel-mvp/internal/state"
 	"io"
 	"log/slog"
 	"net/http"
@@ -14,6 +13,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/XUJiahua/tunnel-mvp/internal/state"
 )
 
 type pooledTransport struct {
@@ -162,6 +163,7 @@ func (s *Server) startBackground() {
 	s.startStorageFence(ctx)
 	s.startSharedAuth(ctx)
 	s.startCluster(ctx)
+	s.startObservations(ctx)
 }
 func (s *Server) probeAll(ctx context.Context) {
 	// Four workers bound concurrency and shutdown latency; one batch at a time.
@@ -190,6 +192,10 @@ func (s *Server) probeAll(ctx context.Context) {
 	wg.Wait()
 }
 func (s *Server) saveReport(svc Service, report probeReport) {
+	if s.cluster != nil {
+		report.NodeID = s.cluster.node.ID
+		report.NodeEpoch = s.cluster.node.Epoch
+	}
 	// Order with target edits/deletes; an obsolete probe must not restore a stale
 	// result or keep an obsolete connection pool alive.
 	s.accessMu.RLock()
@@ -209,6 +215,7 @@ func (s *Server) saveReport(svc Service, report probeReport) {
 	s.monitorMu.Unlock()
 	if err := s.history.save(svc, report); err != nil {
 		s.stats.historyErrors.Add(1)
+		s.history.observationError()
 		slog.Error("monitoring history write failed", "service_id", svc.ID, "error", err)
 	}
 	if !exists || old.Reachable != report.Reachable || old.Healthy != report.Healthy {
@@ -216,6 +223,16 @@ func (s *Server) saveReport(svc Service, report probeReport) {
 	}
 }
 func (s *Server) status(w http.ResponseWriter, r *http.Request, u User) {
+	if s.observer != nil {
+		reports, err := s.latestClusterReports(r, false)
+		if err != nil {
+			fail(w, 503, "cluster monitoring unavailable or authorization changed")
+			return
+		}
+		jsonOut(w, 200, map[string]any{"probeIntervalSeconds": s.cfg.ProbeIntervalSeconds, "reports": reports, "scope": "cluster"})
+		return
+	}
+
 	out := []probeReport{}
 	s.monitorMu.Lock()
 	reports := make(map[string]probeReport, len(s.reports))
@@ -236,8 +253,24 @@ func metric(w io.Writer, name, help, kind string, value any) {
 	fmt.Fprintf(w, "# HELP %s %s\n# TYPE %s %s\n%s %v\n", name, help, name, kind, name, value)
 }
 func (s *Server) metrics(w http.ResponseWriter, r *http.Request, _ User) {
+	sharedReports := map[string]probeReport{}
+	if s.observer != nil {
+		rows, err := s.latestClusterReports(r, r.URL.Path == "/metrics")
+		if err != nil {
+			fail(w, 503, "cluster health metrics unavailable")
+			return
+		}
+		for _, p := range rows {
+			sharedReports[p.ServiceID] = p
+		}
+	}
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
+	if s.observer != nil {
+		if !s.observationMetrics(w, r) {
+			return
+		}
+	}
 	syncEnabled := 0
 	if s.identitySync != nil {
 		syncEnabled = 1
@@ -283,10 +316,16 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request, _ User) {
 		}
 		fmt.Fprintf(w, "tunnel_site_online{site_id=%q} %d\ntunnel_site_agents{site_id=%q} %d\n", site.ID, online, site.ID, s.siteAgentCount(site.ID))
 	}
-	s.monitorMu.Lock()
-	defer s.monitorMu.Unlock()
+	reports := sharedReports
+	if s.observer == nil {
+		s.monitorMu.Lock()
+		for id, p := range s.reports {
+			reports[id] = p
+		}
+		s.monitorMu.Unlock()
+	}
 	fmt.Fprint(w, "# HELP tunnel_service_reachable Last probe received HTTP headers.\n# TYPE tunnel_service_reachable gauge\n# HELP tunnel_service_healthy Last probe matched the configured HTTP status policy.\n# TYPE tunnel_service_healthy gauge\n# HELP tunnel_service_probe_timestamp_seconds Last probe start timestamp.\n# TYPE tunnel_service_probe_timestamp_seconds gauge\n# HELP tunnel_service_probe_duration_seconds Last probe duration.\n# TYPE tunnel_service_probe_duration_seconds gauge\n")
-	for id, p := range s.reports {
+	for id, p := range reports {
 		reachable, healthy := 0, 0
 		if p.Reachable {
 			reachable = 1
@@ -328,6 +367,10 @@ func (s *Server) listAudit(w http.ResponseWriter, r *http.Request, actor User) {
 			return
 		}
 		filters.Since = at.UTC().Format(historyTimeLayout)
+	}
+	if s.observer != nil {
+		s.clusterAudit(w, r, filters)
+		return
 	}
 	s.auditMu.Lock()
 	if s.history.auditDirty.Load() {

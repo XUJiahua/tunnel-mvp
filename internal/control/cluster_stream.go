@@ -22,6 +22,7 @@ import (
 const clusterStreamPath = "/_tunnel/internal/v1/stream"
 
 type clusterAuthority struct{ Kind, AccessKey, SessionKey string }
+type clusterRelayKey struct{}
 type clusterAuthorityKey struct{}
 type clusterAgentKey struct{}
 type clusterStreamRequest struct {
@@ -139,7 +140,7 @@ func (c *clusterRuntime) dialRemote(ctx context.Context, view state.ClusterSnaps
 	return remote, nil
 }
 func (c *clusterRuntime) serveStream(w http.ResponseWriter, r *http.Request) {
-	if !c.valid() || r.ProtoMajor != 1 || r.Method != http.MethodConnect || r.URL.Path != clusterStreamPath || r.ContentLength > 0 || len(r.TransferEncoding) > 0 || r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
+	if !c.valid() || c.draining.Load() || r.ProtoMajor != 1 || r.Method != http.MethodConnect || r.URL.Path != clusterStreamPath || r.ContentLength > 0 || len(r.TransferEncoding) > 0 || r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
 		fail(w, 403, "cluster stream rejected")
 		return
 	}
@@ -209,7 +210,7 @@ func (c *clusterRuntime) serveStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer releasePeer()
-	flowCtx, releaseAuth, err := c.authorizeStream(peerCtx, request, svc, proofStarted)
+	flowCtx, releaseAuth, err := c.authorizeStream(context.WithValue(peerCtx, clusterRelayKey{}, true), request, svc, proofStarted)
 	if err != nil {
 		fail(w, 403, "cluster application authority rejected")
 		return
@@ -331,7 +332,7 @@ func (s *Server) trackSystemRoute(parent context.Context, svc Service, started t
 	lease := newAuthLease(ctx, cancel, started.Add(authorizationLease))
 	id := randomID()
 	s.liveMu.Lock()
-	s.live[id] = liveRequest{system: true, route: svc, serviceID: svc.ID, cancel: func() { lease.stop(); cancel() }, lease: lease}
+	s.live[id] = liveRequest{relay: true, system: true, route: svc, serviceID: svc.ID, cancel: func() { lease.stop(); cancel() }, lease: lease}
 	s.liveMu.Unlock()
 	return ctx, func() { lease.stop(); cancel(); s.liveMu.Lock(); delete(s.live, id); s.liveMu.Unlock() }
 }

@@ -31,12 +31,22 @@ jobs:
     env:
       TUNNEL_TEST_POSTGRES_DSN: postgres://postgres:tunnel-test-only@127.0.0.1:5432/postgres?sslmode=disable
       TUNNEL_REQUIRE_POSTGRES_TESTS: '1'
+      TUNNEL_REQUIRE_HA3_TESTS: '1'
+      TUNNEL_TEST_HA3_BINARY: ${{ runner.temp }}/tunnel-ha3-binary
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version: '1.27.2'
           cache: true
+      - name: Build pinned HA-3 CLI for archive compatibility
+        run: |
+          git fetch --no-tags origin 29fcd9399507da008385fcd3136279c2d781a168
+          git worktree add --detach "$RUNNER_TEMP/tunnel-ha3-source" 29fcd9399507da008385fcd3136279c2d781a168
+          CGO_ENABLED=0 go -C "$RUNNER_TEMP/tunnel-ha3-source" build -trimpath -o "$TUNNEL_TEST_HA3_BINARY" ./cmd/tunnel
+          go test -race -count=1 -timeout=2m -v ./internal/control -run '^TestObservationJournal'
+      - name: HA-4 shared observations, authorization, durable replay and drain
+        run: go test -race -count=2 -timeout=4m -v ./internal/state ./internal/control -run '^TestPostgresCluster(Observation|SharedHealth)'
       - name: HA-3 real cluster routing, partition and process-crash takeover
         run: go test -race -count=2 -timeout=4m -v ./internal/state ./internal/control -run '^TestPostgresCluster'
       - name: Shared-auth pool proof races and real connection reuse

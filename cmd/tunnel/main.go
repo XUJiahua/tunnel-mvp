@@ -83,6 +83,7 @@ func newRootCommand() *cobra.Command {
 		if check {
 			return output(cmd, c)
 		}
+		c.RuntimeVersion = version
 		s, err := control.New(c, os.Getenv("TUNNEL_ADMIN_PASSWORD"))
 		if err != nil {
 			return err
@@ -90,6 +91,7 @@ func newRootCommand() *cobra.Command {
 		defer s.Close()
 		return s.Run(cmd.Context())
 	}}
+	server.Flags().Int("cluster-observation-buffer-mb", 0, "Durable observation buffer in MiB (default 256 in cluster mode)")
 	server.Flags().Bool("cluster-enabled", false, "Enable PostgreSQL multi-node routing with mutual TLS")
 	server.Flags().String("cluster-node-id", "", "Unique node ID bound to its certificate URI")
 	server.Flags().String("cluster-listen", "", "Private mutual-TLS host:port")
