@@ -1,0 +1,49 @@
+{
+  "generatedAt": "2026-10-20T02:18:43.252Z",
+  "status": "pass",
+  "stages": [
+    {
+      "name": "public tunnel allocation",
+      "result": "pass"
+    },
+    {
+      "name": "public HTTPS control plane and embedded UI",
+      "result": "pass"
+    },
+    {
+      "name": "two synthetic sites and four public WSS Agent connections",
+      "result": "pass"
+    },
+    {
+      "name": "public application login redirects secure cookies and uploads",
+      "result": "pass"
+    },
+    {
+      "name": "site authorization isolation and unauthenticated rejection",
+      "result": "pass"
+    },
+    {
+      "name": "Agent failure and public WSS reconnection",
+      "result": "pass"
+    },
+    {
+      "name": "public bidirectional WebSocket and logout revocation",
+      "result": "pass"
+    }
+  ],
+  "sourceCommit": "5c687a7c25f969a8763824cac46a65ebc5b58e20",
+  "topology": "One host; separate Server and four Agent processes, two synthetic sites. Console and two applications use separate Cloudflare Quick Tunnels. Agent WSS and browser HTTPS/WSS traverse public Cloudflare edges.",
+  "limitations": [
+    "Single host/process isolation, not two physical private networks",
+    "Cloudflare Quick Tunnels do not support SSE; SSE is not tested",
+    "Not an HA, production capacity, real business application or IdP acceptance"
+  ],
+  "urls": {
+    "console": "https://personal-davidson-ambassador-ridge.trycloudflare.com",
+    "applications": [
+      "https://allows-ghz-anna-visibility.trycloudflare.com",
+      "https://progressive-josh-kathy-belfast.trycloudflare.com"
+    ]
+  },
+  "cleanedUp": true
+}
