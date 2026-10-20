@@ -37,27 +37,29 @@ type pgMetadata struct {
 // PostgresRepository owns a pinned connection: its session lock can never be
 // renewed on a replacement connection. There is no retained authorization cache.
 type PostgresRepository struct {
-	mu             sync.Mutex
-	db             *sql.DB
-	conn           *sql.Conn
-	exclusive      bool
-	runtime        bool
-	owner          string
-	authPolicyHash string
-	allowRecovery  bool
-	pid            int
-	closed         atomic.Bool
-	lost           atomic.Bool
-	failures       atomic.Uint64
-	loss           chan struct{}
-	lossOnce       sync.Once
-	cancel         context.CancelFunc
-	wg             sync.WaitGroup
-	directoryLock  io.Closer
+	mu                    sync.Mutex
+	db                    *sql.DB
+	conn                  *sql.Conn
+	exclusive             bool
+	runtime               bool
+	cluster, clusterFresh bool
+	nodeID, nodeEpoch     string
+	owner                 string
+	authPolicyHash        string
+	allowRecovery         bool
+	pid                   int
+	closed                atomic.Bool
+	lost                  atomic.Bool
+	failures              atomic.Uint64
+	loss                  chan struct{}
+	lossOnce              sync.Once
+	cancel                context.CancelFunc
+	wg                    sync.WaitGroup
+	directoryLock         io.Closer
 }
 type pgOpenOptions struct {
-	exclusive, runtime, empty, recover bool
-	initialize                         func() (State, error)
+	exclusive, runtime, empty, recover, cluster bool
+	initialize                                  func() (State, error)
 }
 
 func OpenPostgres(ctx context.Context, dsn string, initialize func() (State, error)) (*PostgresRepository, error) {
@@ -74,7 +76,7 @@ func pgSafeError(err error) error {
 	if err == nil {
 		return nil
 	}
-	if errors.Is(err, ErrAuthCapacity) || errors.Is(err, ErrAuthChanged) || errors.Is(err, ErrAuthPolicy) || errors.Is(err, ErrAuthUnavailable) || errors.Is(err, ErrRevisionConflict) || errors.Is(err, ErrPostgresBusy) || errors.Is(err, ErrPostgresRecovery) || errors.Is(err, ErrPostgresSchema) || errors.Is(err, ErrDirectoryChanged) || errors.Is(err, ErrDirectoryQuery) {
+	if errors.Is(err, ErrClusterLease) || errors.Is(err, ErrClusterBusy) || errors.Is(err, ErrAuthCapacity) || errors.Is(err, ErrAuthChanged) || errors.Is(err, ErrAuthPolicy) || errors.Is(err, ErrAuthUnavailable) || errors.Is(err, ErrRevisionConflict) || errors.Is(err, ErrPostgresBusy) || errors.Is(err, ErrPostgresRecovery) || errors.Is(err, ErrPostgresSchema) || errors.Is(err, ErrDirectoryChanged) || errors.Is(err, ErrDirectoryQuery) {
 		return err
 	}
 	var pg *pq.Error
@@ -94,7 +96,7 @@ func openPostgres(ctx context.Context, dsn string, options pgOpenOptions) (*Post
 	}
 	db.SetMaxOpenConns(4)
 	db.SetMaxIdleConns(2)
-	p := &PostgresRepository{db: db, exclusive: options.exclusive, runtime: options.runtime, allowRecovery: options.recover, loss: make(chan struct{})}
+	p := &PostgresRepository{db: db, exclusive: options.exclusive, runtime: options.runtime, allowRecovery: options.recover, cluster: options.cluster, loss: make(chan struct{})}
 	success := false
 	defer func() {
 		if !success {
@@ -175,8 +177,11 @@ func openPostgres(ctx context.Context, dsn string, options pgOpenOptions) (*Post
 		if err = tx.QueryRowContext(ctx, `SELECT schema_version FROM tunnel_state.meta WHERE singleton`).Scan(&version); err != nil {
 			return nil, pgSafeError(err)
 		}
-		if version == 1 {
+		if version == 1 || version == 2 {
 			if err = pgCreateAuthSchema(ctx, tx); err != nil {
+				return nil, pgSafeError(err)
+			}
+			if err = pgCreateClusterSchema(ctx, tx); err != nil {
 				return nil, pgSafeError(err)
 			}
 			if _, err = tx.ExecContext(ctx, `UPDATE tunnel_state.meta SET schema_version=$1,revision=revision+1 WHERE singleton`, PostgresSchemaVersion); err != nil {
@@ -188,11 +193,17 @@ func openPostgres(ctx context.Context, dsn string, options pgOpenOptions) (*Post
 	if err != nil {
 		return nil, pgSafeError(err)
 	}
-	if meta.Owner != "" && !options.recover {
+	if meta.Owner != "" && !options.recover && !(options.cluster && meta.Owner == clusterRuntimeOwner) {
 		return nil, ErrPostgresRecovery
 	}
 	if _, err = pgReadState(ctx, tx); err != nil {
 		return nil, pgSafeError(err)
+	}
+	if options.cluster && meta.Owner == "" {
+		p.clusterFresh = true
+		if _, err = tx.ExecContext(ctx, `UPDATE tunnel_state.meta SET runtime_owner=$1 WHERE singleton`, clusterRuntimeOwner); err != nil {
+			return nil, pgSafeError(err)
+		}
 	}
 	if options.runtime {
 		p.owner, err = pgRandomID()
@@ -296,7 +307,7 @@ func (p *PostgresRepository) read(ctx context.Context, fn func(context.Context, 
 		return p.failed(err, true)
 	}
 	meta, err := pgReadMeta(ctx, tx, "")
-	if err == nil && (p.runtime && meta.Owner != p.owner || !p.runtime && !p.allowRecovery && meta.Owner != "") {
+	if err == nil && (!p.validOwner(meta.Owner)) {
 		p.fence()
 		err = ErrPostgresUnavailable
 	}
@@ -377,7 +388,7 @@ func (p *PostgresRepository) transact(ctx context.Context, expected *uint64, aut
 	if err != nil {
 		return p.failed(err, false)
 	}
-	if p.runtime && meta.Owner != p.owner || !p.runtime && !p.allowRecovery && meta.Owner != "" {
+	if !p.validOwner(meta.Owner) {
 		p.fence()
 		return ErrPostgresUnavailable
 	}
@@ -508,7 +519,7 @@ func (p *PostgresRepository) Close() error {
 	return pgSafeError(closeErr)
 }
 
-func (p *PostgresRepository) validateLease(ctx context.Context, tx *sql.Tx) error {
+func (p *PostgresRepository) validatePhysicalLease(ctx context.Context, tx *sql.Tx) error {
 	mode := "ShareLock"
 	if p.exclusive {
 		mode = "ExclusiveLock"
@@ -523,4 +534,10 @@ func (p *PostgresRepository) validateLease(ctx context.Context, tx *sql.Tx) erro
 		return ErrPostgresUnavailable
 	}
 	return nil
+}
+func (p *PostgresRepository) validateLease(ctx context.Context, tx *sql.Tx) error {
+	if err := p.validatePhysicalLease(ctx, tx); err != nil {
+		return err
+	}
+	return p.validateClusterNode(ctx, tx)
 }

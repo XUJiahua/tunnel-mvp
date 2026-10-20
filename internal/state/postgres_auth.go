@@ -45,7 +45,7 @@ func (p *PostgresRepository) authWrite(ctx context.Context, fn func(context.Cont
 	if err != nil {
 		return p.failed(err, false)
 	}
-	if p.runtime && m.Owner != p.owner || !p.runtime && !p.allowRecovery && m.Owner != "" {
+	if !p.validOwner(m.Owner) {
 		p.fence()
 		return ErrPostgresUnavailable
 	}
@@ -228,7 +228,7 @@ func (p *PostgresRepository) AuthBindPolicy(ctx context.Context, policy string) 
 	if err != nil {
 		return p.failed(err, false)
 	}
-	if p.runtime && m.Owner != p.owner || !p.runtime && !p.allowRecovery && m.Owner != "" {
+	if !p.validOwner(m.Owner) {
 		p.fence()
 		return ErrPostgresUnavailable
 	}
@@ -236,7 +236,7 @@ func (p *PostgresRepository) AuthBindPolicy(ctx context.Context, policy string) 
 	if err = tx.QueryRowContext(ctx, `SELECT policy_hash FROM tunnel_state.auth_policy WHERE singleton FOR UPDATE`).Scan(&old); err != nil {
 		return p.failed(err, false)
 	}
-	if old != "" && old != policy && !p.runtime {
+	if old != "" && old != policy && !p.runtime && !p.clusterFresh {
 		return ErrAuthPolicy
 	}
 	if old != policy {
