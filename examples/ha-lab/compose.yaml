@@ -1,0 +1,93 @@
+# Isolated single-host acceptance lab. Prepare with scripts/verify-ha-deployment.py.
+# No database, node HTTP listener or cluster mTLS port is published.
+x-node: &node
+  image: ${LAB_IMAGE:?}
+  user: ${LAB_UID:?}:${LAB_GID:?}
+  command: [server, --config, /etc/tunnel/server.json]
+  environment:
+    TUNNEL_POSTGRES_DSN: ${LAB_POSTGRES_DSN:?}
+    TUNNEL_ADMIN_PASSWORD: ${LAB_ADMIN_PASSWORD:?}
+  depends_on:
+    database:
+      condition: service_healthy
+  networks: [edge, cluster]
+  restart: "no"
+  stop_grace_period: 15s
+services:
+  database:
+    image: postgres:${LAB_POSTGRES_VERSION:-18}
+    environment:
+      POSTGRES_USER: tunnel
+      POSTGRES_DB: tunnel
+      PGDATA: /var/lib/postgresql/lab-data
+      POSTGRES_PASSWORD_FILE: /run/secrets/database-password
+    volumes:
+      - database:/var/lib/postgresql
+    secrets: [database-password]
+    networks: [cluster]
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U tunnel -d tunnel]
+      interval: 1s
+      timeout: 3s
+      retries: 45
+  node-a:
+    <<: *node
+    build:
+      context: ../..
+      args:
+        COMMIT: ${LAB_COMMIT:?}
+    volumes:
+      - ${LAB_RUNTIME:?}/node-a:/var/lib/tunnel
+      - ${LAB_RUNTIME:?}/server-a.json:/etc/tunnel/server.json:ro
+      - ${LAB_RUNTIME:?}/pki/node-a:/etc/tunnel/pki:ro
+  node-b:
+    <<: *node
+    volumes:
+      - ${LAB_RUNTIME:?}/node-b:/var/lib/tunnel
+      - ${LAB_RUNTIME:?}/server-b.json:/etc/tunnel/server.json:ro
+      - ${LAB_RUNTIME:?}/pki/node-b:/etc/tunnel/pki:ro
+  edge:
+    image: haproxy:3.2-alpine
+    user: ${LAB_UID:?}:${LAB_GID:?}
+    ports:
+      - 127.0.0.1:28443:28443
+      # Test-only directed management listeners, never public endpoints.
+      - 127.0.0.1:28444:28444
+      - 127.0.0.1:28445:28445
+    volumes:
+      - ./haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+      - ${LAB_RUNTIME:?}/public.pem:/etc/tunnel/public.pem:ro
+    depends_on: [node-a, node-b]
+    networks:
+      edge:
+        aliases: [console.tunnel.test]
+  agent:
+    image: ${LAB_IMAGE:?}
+    user: ${LAB_UID:?}:${LAB_GID:?}
+    profiles: [agents]
+    command: [agent, --config, /etc/tunnel/agent.json]
+    environment:
+      SSL_CERT_FILE: /etc/tunnel/public-ca.crt
+    env_file: ${LAB_RUNTIME:?}/agent.env
+    volumes:
+      - ${LAB_RUNTIME:?}/agent.json:/etc/tunnel/agent.json:ro
+      - ${LAB_RUNTIME:?}/public-ca.crt:/etc/tunnel/public-ca.crt:ro
+    networks: [edge, site]
+    restart: "no"
+  application:
+    image: python:3.13-alpine
+    command: [python3, -u, /app/application.py]
+    volumes:
+      - ./application.py:/app/application.py:ro
+    networks: [site]
+networks:
+  edge: {}
+  cluster:
+    internal: true
+  site:
+    internal: true
+volumes:
+  database: {}
+secrets:
+  database-password:
+    file: ${LAB_RUNTIME:?}/database-password

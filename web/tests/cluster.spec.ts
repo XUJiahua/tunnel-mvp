@@ -101,14 +101,18 @@ test.describe("HA-4 real mixed-version cluster", () => {
     command("bash", [resolve(root, "scripts/create-cluster-pki.sh"), resolve(dir, "pki"), ...nodeIDs.map((id) => id + "=127.0.0.1")]);
     lb = http.createServer((req, res) => {
       const proxy = forward(req);
-      proxy.on("response", (remote) => { res.writeHead(remote.statusCode || 502, remote.headers); remote.pipe(res); });
+      proxy.on("response", (remote) => { remote.on("error", () => res.destroy()); res.writeHead(remote.statusCode || 502, remote.headers); remote.pipe(res); });
       proxy.on("error", () => { if (!res.headersSent) res.writeHead(502); res.end("node unavailable"); }); req.pipe(proxy);
       res.on("close", () => proxy.destroy());
     });
-    lb.on("connection", (socket) => { sockets.add(socket); socket.on("close", () => sockets.delete(socket)); });
+    lb.on("connection", (socket) => { sockets.add(socket); socket.on("error", () => socket.destroy()); socket.on("close", () => sockets.delete(socket)); });
     lb.on("upgrade", (req, socket, head) => {
       const proxy = forward(req); proxy.on("error", () => socket.destroy());
       proxy.on("upgrade", (response, remote, remoteHead) => {
+        // Rolling stop/rollback deliberately resets upgraded Agent sockets.
+        // Close both ends without an unhandled EventEmitter error in the test LB.
+        const disconnected = () => { socket.destroy(); remote.destroy(); };
+        socket.on("error", disconnected); remote.on("error", disconnected);
         socket.write(`HTTP/1.1 ${response.statusCode} ${response.statusMessage}\r\n` + response.rawHeaders.reduce((all, value, i) => all + (i % 2 ? value + "\r\n" : value + ": "), "") + "\r\n");
         if (head.length) remote.write(head); if (remoteHead.length) socket.write(remoteHead);
         socket.pipe(remote); remote.pipe(socket); socket.on("close", () => remote.destroy()); remote.on("close", () => socket.destroy());

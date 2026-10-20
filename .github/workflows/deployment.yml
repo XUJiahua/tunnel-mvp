@@ -1,0 +1,36 @@
+name: ha-deployment
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+jobs:
+  compose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres: ['15', '18']
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Python syntax
+        run: python3 -m py_compile scripts/verify-ha-deployment.py examples/ha-lab/application.py
+      - name: Real TLS load balancer, isolated application and HA fault acceptance
+        run: >-
+          python3 scripts/verify-ha-deployment.py
+          --postgres '${{ matrix.postgres }}'
+          --runtime "$RUNNER_TEMP/tunnel-ha-lab"
+          --report "$RUNNER_TEMP/ha-deployment-report.json"
+      # Never upload runtime: it contains test passwords and private keys.
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ha-deployment-pg${{ matrix.postgres }}-${{ github.sha }}
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/ha-deployment-report.json
+            ${{ runner.temp }}/tunnel-ha-lab/diagnostics.log
