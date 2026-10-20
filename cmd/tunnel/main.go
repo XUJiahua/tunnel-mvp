@@ -106,7 +106,7 @@ func newRootCommand() *cobra.Command {
 	server.Flags().String("listen", ":8080", "HTTP listen address")
 	server.Flags().String("public-url", "http://localhost:8080", "Public console origin")
 	server.Flags().String("access-url", "http://apps.localhost:8080", "Application domain origin")
-	server.Flags().String("storage", "json", "State storage backend: json or sqlite")
+	server.Flags().String("storage", "json", "State storage backend: json, sqlite or postgres")
 	server.Flags().String("data-dir", "data", "Persistent state and audit directory")
 	server.Flags().String("admin-username", "admin", "First-start administrator username")
 	server.Flags().Bool("check-config", false, "Validate and print effective configuration without starting")

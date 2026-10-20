@@ -1,12 +1,14 @@
 package control
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"github.com/XUJiahua/tunnel-mvp/internal/state"
 	"golang.org/x/crypto/bcrypt"
+	"os"
 )
 
 type User = state.User
@@ -27,7 +29,7 @@ func OpenStore(dir, username, password string) (*Store, error) {
 	return openStore(dir, state.JSON, username, password)
 }
 func openStore(dir, kind, username, password string) (*Store, error) {
-	repo, err := state.Open(dir, kind, func() (State, error) {
+	initialize := func() (State, error) {
 		if len(password) < 12 || len(password) > 72 {
 			return State{}, fmt.Errorf("first start requires TUNNEL_ADMIN_PASSWORD (12–72 bytes)")
 		}
@@ -36,7 +38,14 @@ func openStore(dir, kind, username, password string) (*Store, error) {
 			return State{}, err
 		}
 		return State{Users: []User{{ID: randomID()[:16], Username: username, PasswordHash: string(h), Role: "admin", SiteIDs: []string{}, ServiceIDs: []string{}}}}, nil
-	})
+	}
+	var repo state.Repository
+	var err error
+	if kind == state.Postgres {
+		repo, err = state.OpenPostgresRuntime(context.Background(), dir, os.Getenv("TUNNEL_POSTGRES_DSN"), initialize)
+	} else {
+		repo, err = state.Open(dir, kind, initialize)
+	}
 	if err != nil {
 		return nil, err
 	}

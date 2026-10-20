@@ -1,0 +1,37 @@
+name: postgres-storage
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  postgres:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        version: ['15', '18']
+    services:
+      postgres:
+        image: postgres:${{ matrix.version }}
+        env:
+          POSTGRES_PASSWORD: tunnel-test-only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 15
+    env:
+      TUNNEL_TEST_POSTGRES_DSN: postgres://postgres:tunnel-test-only@127.0.0.1:5432/postgres?sslmode=disable
+      TUNNEL_REQUIRE_POSTGRES_TESTS: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.2'
+          cache: true
+      - name: Real database concurrency, constraints, recovery and proxy fencing
+        run: go test -race -count=1 -timeout=10m -v ./internal/state ./internal/control ./cmd/tunnel -run Postgres

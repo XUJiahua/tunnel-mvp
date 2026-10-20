@@ -69,6 +69,9 @@ func existing(dir, kind string) (backend, State, error) {
 	if err != nil {
 		return nil, State{}, err
 	}
+	if err = rejectPostgresBinding(dir); err != nil {
+		return nil, State{}, err
+	}
 	return readBackend(filepath.Join(dir, name), kind)
 }
 func Inspect(dir, kind string) (Summary, error) {
@@ -110,6 +113,9 @@ func Export(dir, kind, output string) (Summary, error) {
 	return summarize(kind, s), nil
 }
 func MigrateJSON(dir string) (Summary, error) {
+	if err := rejectPostgresBinding(dir); err != nil {
+		return Summary{}, err
+	}
 	lock, err := lockExistingDir(dir)
 	if err != nil {
 		return Summary{}, err
@@ -148,7 +154,7 @@ func Restore(dir, kind, input string) (Summary, error) {
 		return Summary{}, err
 	}
 	defer lock.Close()
-	for _, name := range []string{"state.json", "state.db"} {
+	for _, name := range []string{"state.json", "state.db", postgresBinding} {
 		if found, err := exists(filepath.Join(dir, name)); err != nil {
 			return Summary{}, err
 		} else if found {
