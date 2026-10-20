@@ -49,6 +49,6 @@ bash scripts/create-cluster-pki.sh ./cluster-pki \
 
 ## 验收与证据边界
 
-隔离 CI PostgreSQL 15/18 强制运行 `TestPostgresCluster*`：数据库代际/旧释放保护、schema v2 升级、模式排斥；两个独立 Server、私有 TLS 监听、HTTP LB 和真实 Agent 的跨节点 HTTP/上传/WS/SSE、跨节点注销、心跳中断后的本地 fencing 和接管、POST 单次上游执行、伪造 generation/目标/成员 incarnation/数据库/授权及公网注入拒绝。没有测试 DSN 时本地跳过数据库测试，不能当作数据库通过；最终结果见 PR #30。
+隔离 CI PostgreSQL 15/18 强制运行 `TestPostgresCluster*`：数据库代际/旧释放保护、schema v2 升级、模式排斥；两个独立 Server、私有 TLS 监听、HTTP LB 和真实 Agent 的跨节点 HTTP/上传/WS/SSE、跨节点注销、心跳中断后的本地 fencing 和接管、直接杀掉独立 owner OS 进程后的真实 Agent 重连、POST 单次上游执行、伪造 generation/目标/成员 incarnation/数据库/授权及公网注入拒绝。没有测试 DSN 时本地跳过数据库测试，不能当作数据库通过；最终结果见 PR #30。
 
-仍需目标部署验收：独立宿主机 kill -9/网络分区与数据库主备切换、生产负载及恢复 SLO、外部 LB/TLS 超时、证书轮换和完整恢复演练。macOS/Windows 实际服务管理器、AD/NTLM、额外 IdP 租户分别记录；交叉编译不能替代这些测试。HA-4 继续补跨节点监控/审计来源、聚合与去重。
+仍需目标部署验收：跨宿主机 kill -9/网络分区与数据库主备切换、生产负载及恢复 SLO、外部 LB/TLS 超时、证书轮换和完整恢复演练。macOS/Windows 实际服务管理器、AD/NTLM、额外 IdP 租户分别记录；交叉编译不能替代这些测试。HA-4 继续补跨节点监控/审计来源、聚合与去重。

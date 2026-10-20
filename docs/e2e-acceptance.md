@@ -55,7 +55,7 @@ pnpm --dir web run test:e2e
 
 ## 未覆盖与继续条件
 
-Linux 上执行的协议/进程测试和六平台编译没有验证 macOS/Windows 服务管理、真实 AD/NTLM、更多 IdP 或生产负载。资源自定义域名测试包含运行中更换域名、旧入口拒绝和新入口登录，但只验证代理路由，不代表外部 DNS/TLS 自动管理已实现。控制面 HA 仍未实现，现有测试没有多节点数据库/集群故障保证。
+Linux 上执行的协议/进程测试和六平台编译没有验证 macOS/Windows 服务管理、真实 AD/NTLM、更多 IdP 或生产负载。资源自定义域名测试包含运行中更换域名、旧入口拒绝和新入口登录，但只验证代理路由，不代表外部 DNS/TLS 自动管理已实现。此历史基线没有多节点集群故障保证；后续 HA-1/2/3 的验证见下方阶段记录。
 
 待实现的多组织成员、组织级 IdP 和设备风险识别继续列于路线图。HA 代码分解见 [设计](design/control-plane-ha.md)，隔离环境与故障验收要求见 [操作手册](ha-operations.md)。
 
@@ -86,3 +86,9 @@ Linux 上执行的协议/进程测试和六平台编译没有验证 macOS/Window
 新增独立 postgres-storage 工作流，在 PostgreSQL 15/18 服务上强制运行真实数据库 race 测试、完整控制面回归、按浏览器夹具分配独立空库的全部浏览器用例及原生 Keycloak。覆盖双客户端并发/CAS/重建、最后管理员并发保护、SQL 约束/失败回滚、一致性投影与游标、三后端迁移/恢复、固定连接终止及真实 Agent SSE/WS 断流。测试 DSN 缺失在该工作流直接失败，不把本地 skip 计为通过。
 
 首轮数据库/故障专项已在 PostgreSQL 15/18 通过（commit ca8a160）；扩大的最终门禁以本批 PR 的 head CI 为准。JSON/SQLite、真实旧版升级、六平台与原生 Keycloak 原有门禁保留。HA-1 只验证共享存储事务和单活 Server，不能作为双控制面 HA 验收。操作及性能边界见 [PostgreSQL 手册](postgres-operations.md)。
+
+## HA-3：节点所有权与跨节点流
+
+PR #30 增加 PostgreSQL schema v3、显式 cluster 配置、独立 TLS 1.3 mTLS 监听及精确 Agent generation 路由。PostgreSQL 15/18 工作流新增优先执行两轮 `TestPostgresCluster*` 的门禁：数据库过期 incarnation/旧释放保护、两个 Server/LB/真实 Agent 的 HTTP/上传/WS/SSE/跨节点注销、心跳分区的独立截止时间和接管、同 CA 未登记叶证书与伪造信封拒绝、上游 HTTPS 证书验证。独立 OS 进程用例直接杀掉 owner，要求真实 Agent 经 LB 重连另一节点、generation 增加且已有 POST 上游只执行一次；它不执行正常关闭或手工清理数据库 claim。
+
+本地无 PostgreSQL 服务时这些数据库用例会跳过；本地 Go race/TLS/配置通过不代表 PostgreSQL 通过。最终 head、CI、快照及旧版升级证据记录在 PR #30；HA-4 监控/审计聚合、滚动恢复和真实跨主机部署演练仍待完成。
