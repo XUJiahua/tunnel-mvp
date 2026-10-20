@@ -40,3 +40,11 @@ Quick Tunnel 官方明确不支持 SSE，本脚本不执行或宣称通过 SSE�
 2026-10-20 的工作环境已安装 cloudflared 2026.10.1，官方 Linux amd64 SHA-256 为 `3bfc539f45d2620c71debb7a86be0efa737ed5ccbad9eb85c787116900e5c586`。申请入口时 DNS 连接返回 `network is unreachable`，故当前环境没有生成可访问的公网入口；普通 curl HTTPS 可用不代表原生隧道所需网络可用。
 
 `.github/workflows/cloudflare-simulation.yml` 在独立 GitHub Actions runner 执行同样的原生进程模拟，固定并校验上述官方二进制，只有 contents:read 权限，不接入 Cloudflare 账号或生产 Secret。任务上传无秘密报告，执行结果以对应 Actions run 为准；失败不能被标为网络已打通。它不依赖开发环境的浏览器或网络限制。
+
+## 公网实测记录
+
+2026-10-20 的 [专项 CI 39358115397](https://github.com/XUJiahua/tunnel-mvp/actions/runs/39358115397) 已成功完成七个阶段。PR head 为 `7f7f1cded7b863ed32ff1d382b4ca7023a66a420`；Actions 实际检出的测试合并提交为 `5c687a7c25f969a8763824cac46a65ebc5b58e20`，原始报告记录该执行修订，不能混写为 head。
+
+控制台浏览器 HTTPS 登录、四 Agent 公网 WSS、两个独立域名的应用登录/重定向/Cookie/上传、站点授权拒绝、单 Agent 故障与重连、公网双向 WebSocket 和退出撤销全部通过。报告的 cleanedUp=true，临时公网入口已经关闭，不能用其中的域名作为长期部署地址。
+
+[原始无秘密报告](acceptance/2026-10-20-cloudflare.json) 从 Actions artifact 取回并验证 ZIP SHA-256/CRC；保留实际修订、临时 URL、阶段结果及清理状态。本次是公网链路补验，当前本地执行环境仍未通过原生出站条件。
