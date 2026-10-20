@@ -458,19 +458,16 @@ func (s *Server) disconnect(id string) {
 }
 
 func (s *Server) listSites(w http.ResponseWriter, r *http.Request, u User) {
+	filter := directoryFilter(u)
+	filter.All = anyPermission(u, "sites:manage", "applications:manage", "members:manage", "groups:manage")
+	filter.AllServices = hasPermission(u, "applications:access")
+	st, ok := s.directory(w, r, "sites", filter)
+	if !ok {
+		return
+	}
 	out := []map[string]any{}
-	state := s.store.snapshot()
-	for _, site := range state.Sites {
-		visible := canManage(u, site.OrganizationID, "sites:manage") || canManage(u, site.OrganizationID, "applications:manage") || canManage(u, site.OrganizationID, "members:manage") || canManage(u, site.OrganizationID, "groups:manage") || canAccess(u, site.ID)
-		for _, svc := range state.Services {
-			if svc.SiteID == site.ID && canAccessService(u, svc) {
-				visible = true
-				break
-			}
-		}
-		if visible {
-			out = append(out, map[string]any{"id": site.ID, "name": site.Name, "createdAt": site.CreatedAt, "organizationID": site.OrganizationID, "legacyDisabled": site.LegacyDisabled, "agentCount": len(s.connectedAgents(site.ID)), "online": s.siteOnline(site.ID)})
-		}
+	for _, site := range st.Sites {
+		out = append(out, map[string]any{"id": site.ID, "name": site.Name, "createdAt": site.CreatedAt, "organizationID": site.OrganizationID, "legacyDisabled": site.LegacyDisabled, "agentCount": len(s.connectedAgents(site.ID)), "online": s.siteOnline(site.ID)})
 	}
 	jsonOut(w, 200, out)
 }
@@ -591,7 +588,13 @@ func (s *Server) listServices(w http.ResponseWriter, r *http.Request, u User) {
 		Service
 		Accessible bool `json:"accessible"`
 	}{}
-	for _, v := range s.store.snapshot().Services {
+	filter := directoryFilter(u)
+	filter.All = anyPermission(u, "applications:access", "applications:manage", "members:manage", "groups:manage")
+	st, ok := s.directory(w, r, "services", filter)
+	if !ok {
+		return
+	}
+	for _, v := range st.Services {
 		if canAccessService(u, v) || canManage(u, v.OrganizationID, "applications:manage") || canManage(u, v.OrganizationID, "members:manage") || canManage(u, v.OrganizationID, "groups:manage") {
 			out = append(out, struct {
 				Service
@@ -681,7 +684,12 @@ func (s *Server) deleteService(w http.ResponseWriter, r *http.Request, u User) {
 }
 func (s *Server) listUsers(w http.ResponseWriter, r *http.Request, u User) {
 	users := []userView{}
-	st := s.store.snapshot()
+	filter := directoryFilter(u)
+	filter.ExcludeAdmins = u.Role != "admin"
+	st, ok := s.directory(w, r, "users", filter)
+	if !ok {
+		return
+	}
 	for _, member := range st.Users {
 		if u.Role == "admin" || (member.Role != "admin" && canManage(u, member.OrganizationID, "members:manage")) {
 			member.Permissions = rolePermissions(st, member)

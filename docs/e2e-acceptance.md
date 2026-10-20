@@ -41,6 +41,7 @@ pnpm --dir web run test:e2e
 | agent-policy.spec.ts | 12：初始拒绝、收紧已有流、本地 ACL 上限 |
 | agent-updates.spec.ts | 13：实际编译版本升级、无效候选自动回退、重放拒绝和离线回滚 |
 | connection-mode.spec.ts | 14：浏览器会话连接身份隔离和模式变更撤销 |
+| directory.spec.ts | 阶段四：103 站点分页、页间真实写入冲突、整体重试与第 104 个站点可见 |
 | delegated-roles.spec.ts | 15：有界委派、能力上限、角色成员实时撤销 |
 
 存储迁移/备份版本、事务失败回滚、SQLite 稀疏写入和审计 v2→v3 迁移/保留行不重写/外键拒绝由针对数据库和文件的 Go 测试验证；浏览器同时覆盖持久化后的真实管理行为、重启/恢复及审计查询。不能用浏览器截图证明事务边界。
@@ -56,7 +57,7 @@ pnpm --dir web run test:e2e
 
 Linux 上执行的协议/进程测试和六平台编译没有验证 macOS/Windows 服务管理、真实 AD/NTLM、更多 IdP 或生产负载。资源自定义域名测试包含运行中更换域名、旧入口拒绝和新入口登录，但只验证代理路由，不代表外部 DNS/TLS 自动管理已实现。控制面 HA 仍未实现，现有测试没有多节点数据库/集群故障保证。
 
-待实现的多组织成员、组织级 IdP、设备风险识别和剩余管理列表/成员索引查询继续列于路线图。HA 代码分解见 [设计](design/control-plane-ha.md)，隔离环境与故障验收要求见 [操作手册](ha-operations.md)。
+待实现的多组织成员、组织级 IdP 和设备风险识别继续列于路线图。HA 代码分解见 [设计](design/control-plane-ha.md)，隔离环境与故障验收要求见 [操作手册](ha-operations.md)。
 
 ## #21/#22 最新提交证据
 
@@ -73,3 +74,9 @@ Linux 上执行的协议/进程测试和六平台编译没有验证 macOS/Window
 本次本地应用二进制来自 #22 行为基线，Go 1.27.2 / Linux amd64，旧 Server/旧 Agent/新 Server/上游均为真实进程。JSON、SQLite、双向跨后端配对恢复、原 ID/散列/授权、未授权拒绝、旧会话失效、活动目录锁拒绝、升级后真实写入及原目录回退通过；原始无秘密报告见 [升级记录](acceptance/2026-10-20-upgrade-v011.json)。报告中的 dev/none 是 make build 默认版本元数据，并非正式发布包。候选阶段必须对最终整合提交重新构建、注入版本并重跑。
 
 新演练已进入普通 CI 与发布工作流，输出 JSON 报告作为 Actions artifact；六平台包必须包含升级手册、交付基线和复现脚本。本次本地 Chromium 启动遇到 socket Operation not permitted，浏览器回归交由本批远端 CI；不得将本地受限运行记为通过。
+
+## 阶段四：查询与目录
+
+本批增加两后端登录/目录/成员索引的事务与恢复测试，以及四项前端分页单元测试；原有每后端 15 项浏览器增加为 16 项。目录浏览器故意在第一页后写入，要求丢弃部分结果并从头重读；索引计划、事务回滚和并发跨表一致性由 Go 测试验证。新实现/基准见 [存储查询设计](design/storage-queries.md)。当前提交上的实际全量/浏览器/Keycloak CI 结论以本批 PR 为准，不能复用 #25 的通过状态。
+
+上一阶段 #25 已整合 main，PR CI [39358470814](https://github.com/XUJiahua/tunnel-mvp/actions/runs/39358470814) 的 verify、六平台、双后端 Keycloak 均通过；公网模拟报告见 [边界及证据](cloudflare-simulation.md)。

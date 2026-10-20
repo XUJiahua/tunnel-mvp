@@ -4,7 +4,7 @@
 
 **Go 后端 + Next.js 静态前端，通过 `go:embed` 打进同一个二进制。** 运行时无需 Node.js。内网站点运行同一二进制的 `agent` 模式，只需能够主动访问公网控制面。
 
-> 本文描述当前开发分支能力。#1–#22 的新增功能尚未进入已发布的 v0.1.1；下载旧 Release 不会获得这些功能。发布状态以 [交付基线](docs/release-readiness.md) 为准。
+> 本文描述当前开发分支能力。#1–#25 已整合到 main，新增功能尚未进入已发布的 v0.1.1；下载旧 Release 不会获得这些功能。发布状态以 [交付基线](docs/release-readiness.md) 为准。
 
 ![控制台示例](docs/console.png)
 
@@ -30,11 +30,13 @@
 
 - [应用 OIDC 示例](examples/oidc-app/README.md)、[设计](docs/design/application-oidc.md)与[接入手册](docs/application-oidc-operations.md)：独立应用 client、路径挂载、真实 Keycloak SSO 和退出边界。
 
-- [端到端验收矩阵](docs/e2e-acceptance.md)：截至 #22 的回归覆盖、CI 证据与未验收范围；[控制面 HA 设计提案](docs/design/control-plane-ha.md)及[故障验收手册](docs/ha-operations.md)。
+- [端到端验收矩阵](docs/e2e-acceptance.md)：回归覆盖、CI 证据与未验收范围；[控制面 HA 设计提案](docs/design/control-plane-ha.md)及[故障验收手册](docs/ha-operations.md)。
 
 - [资源定向查询设计](docs/design/resource-queries.md)与[索引操作](docs/resource-query-operations.md)：SQLite ID/域名点查、提交一致性和局部基准。
 
 - [当前用户鉴权投影](docs/design/user-queries.md)与[查询故障手册](docs/user-query-operations.md)：直接/角色/组授权的一致读取和失败指标。
+
+- [存储查询与目录分页](docs/design/storage-queries.md)及[操作手册](docs/storage-query-operations.md)：登录点查、事务成员索引、权限过滤分页和版本冲突重试。
 
 - [交付基线与后续阶段](docs/release-readiness.md)、[v0.1.1 升级与恢复](docs/upgrade-v0.1.1.md)。
 - [Cloudflare 临时公网模拟](docs/cloudflare-simulation.md)：真实公网 HTTPS/WSS 与单机多进程站点；SSE 和物理内网边界单独记录。

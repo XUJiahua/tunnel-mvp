@@ -46,7 +46,13 @@ func (s *Server) groupMembers(w http.ResponseWriter, r *http.Request, u User) {
 		return
 	}
 	out := []map[string]string{}
-	for _, m := range s.store.snapshot().Users {
+	filter := directoryFilter(u)
+	filter.ExcludeAdmins = true
+	st, ok := s.directory(w, r, "users", filter)
+	if !ok {
+		return
+	}
+	for _, m := range st.Users {
 		if m.Role != "admin" && (u.Role == "admin" || m.OrganizationID == u.OrganizationID) {
 			out = append(out, map[string]string{"id": m.ID, "username": m.Username, "organizationID": m.OrganizationID})
 		}
@@ -133,11 +139,15 @@ func selectedOrganization(st State, u User, requested string) (string, error) {
 	return requested, nil
 }
 func (s *Server) listOrganizations(w http.ResponseWriter, r *http.Request, u User) {
+	st, ok := s.directory(w, r, "organizations", directoryFilter(u))
+	if !ok {
+		return
+	}
 	out := []state.Organization{}
-	if u.Role == "admin" || u.OrganizationID == "" {
+	if r.URL.Query().Get("cursor") == "" && (u.Role == "admin" || u.OrganizationID == "") {
 		out = append(out, state.Organization{ID: "default", Name: "默认组织"})
 	}
-	for _, o := range s.store.snapshot().Organizations {
+	for _, o := range st.Organizations {
 		if u.Role == "admin" || o.ID == u.OrganizationID {
 			out = append(out, o)
 		}
@@ -243,7 +253,12 @@ func (s *Server) roleMembers(w http.ResponseWriter, r *http.Request, u User) {
 		fail(w, 403, "role management permission required")
 		return
 	}
-	st := s.store.snapshot()
+	filter := directoryFilter(u)
+	filter.ExcludeAdmins = true
+	st, ok := s.directory(w, r, "users", filter)
+	if !ok {
+		return
+	}
 	out := []map[string]any{}
 	for _, m := range st.Users {
 		if m.Role != "admin" && (u.Role == "admin" || m.OrganizationID == u.OrganizationID) {
@@ -254,7 +269,11 @@ func (s *Server) roleMembers(w http.ResponseWriter, r *http.Request, u User) {
 }
 func (s *Server) listRoles(w http.ResponseWriter, r *http.Request, u User) {
 	out := []map[string]any{}
-	for _, role := range s.store.snapshot().Roles {
+	st, ok := s.directory(w, r, "roles", directoryFilter(u))
+	if !ok {
+		return
+	}
+	for _, role := range st.Roles {
 		if u.Role == "admin" || role.OrganizationID == u.OrganizationID {
 			out = append(out, map[string]any{"id": role.ID, "name": role.Name, "organizationID": role.OrganizationID, "permissions": role.Permissions, "manageable": manageableRole(u, role)})
 		}

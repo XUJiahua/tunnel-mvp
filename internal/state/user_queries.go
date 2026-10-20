@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 )
 
 // UserReader returns an authorization projection: one user, its role and only
@@ -54,25 +55,9 @@ func (s *Store) UserContext(id string) (State, bool, error) {
 	return State{}, false, nil
 }
 func (b *sqliteBackend) userContext(id string) (State, bool, error) {
-	var u User
-	var issuer, subject string
-	err := b.db.QueryRow("SELECT id,username,password_hash,role,disabled,oidc_issuer,oidc_subject,organization_id,role_id FROM users WHERE id=?", id).Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &u.Disabled, &issuer, &subject, &u.OrganizationID, &u.RoleID)
-	if errors.Is(err, sql.ErrNoRows) {
-		return State{}, false, nil
-	}
-	if err != nil {
-		return State{}, false, err
-	}
-	if issuer != "" || subject != "" {
-		u.Identity = &Identity{issuer, subject}
-	}
-	u.SiteIDs, err = b.userGrantIDs("user_sites", "site_id", id)
-	if err != nil {
-		return State{}, false, err
-	}
-	u.ServiceIDs, err = b.userGrantIDs("user_services", "service_id", id)
-	if err != nil {
-		return State{}, false, err
+	u, found, err := b.readUser("id=?", id)
+	if err != nil || !found {
+		return State{}, found, err
 	}
 	st := State{Users: []User{u}}
 	if u.RoleID != "" {
@@ -87,7 +72,7 @@ func (b *sqliteBackend) userContext(id string) (State, bool, error) {
 		}
 		st.Roles = []Role{role}
 	}
-	rows, err := b.db.Query("SELECT id,payload FROM groups WHERE EXISTS (SELECT 1 FROM json_each(groups.payload,'$.memberIDs') AS member WHERE member.value=?) ORDER BY position", id)
+	rows, err := b.db.Query("SELECT g.id,g.payload FROM group_members m JOIN groups g ON g.id=m.group_id WHERE m.user_id=? ORDER BY g.position", id)
 	if err != nil {
 		return State{}, false, err
 	}
@@ -98,7 +83,7 @@ func (b *sqliteBackend) userContext(id string) (State, bool, error) {
 			return State{}, false, err
 		}
 		var g Group
-		if err = decodeStrict([]byte(raw), &g); err != nil || g.ID != groupID || g.OrganizationID != u.OrganizationID {
+		if err = decodeStrict([]byte(raw), &g); err != nil || g.ID != groupID || g.OrganizationID != u.OrganizationID || !slices.Contains(g.MemberIDs, id) {
 			return State{}, false, fmt.Errorf("invalid user group projection")
 		}
 		st.Groups = append(st.Groups, g)
@@ -125,4 +110,28 @@ func (b *sqliteBackend) userGrantIDs(table, column, id string) ([]string, error)
 		out = append(out, grant)
 	}
 	return out, rows.Err()
+}
+
+func (b *sqliteBackend) readUser(where string, args ...any) (User, bool, error) {
+	var u User
+	var issuer, subject string
+	err := b.db.QueryRow("SELECT id,username,password_hash,role,disabled,oidc_issuer,oidc_subject,organization_id,role_id FROM users WHERE "+where, args...).Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &u.Disabled, &issuer, &subject, &u.OrganizationID, &u.RoleID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return User{}, false, nil
+	}
+	if err != nil {
+		return User{}, false, err
+	}
+	if issuer != "" || subject != "" {
+		u.Identity = &Identity{issuer, subject}
+	}
+	u.SiteIDs, err = b.userGrantIDs("user_sites", "site_id", u.ID)
+	if err != nil {
+		return User{}, false, err
+	}
+	u.ServiceIDs, err = b.userGrantIDs("user_services", "service_id", u.ID)
+	if err != nil {
+		return User{}, false, err
+	}
+	return u, true, nil
 }

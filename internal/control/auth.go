@@ -131,12 +131,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	lim.Count++
 	s.auth.attempts["login"] = lim
 	s.auth.mu.Unlock()
-	var found User
-	for _, u := range s.store.snapshot().Users {
-		if u.Username == body.Username {
-			found = u
-		}
-	}
+	found, _ := s.store.userByUsername(body.Username)
 	hash := found.PasswordHash
 	if hash == "" {
 		hash = s.dummyHash

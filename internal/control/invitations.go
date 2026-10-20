@@ -27,7 +27,11 @@ func viewInvite(v state.Invite) inviteView {
 }
 func (s *Server) listInvites(w http.ResponseWriter, r *http.Request, actor User) {
 	out := []inviteView{}
-	for _, v := range s.store.snapshot().Invites {
+	st, ok := s.directory(w, r, "invitations", directoryFilter(actor))
+	if !ok {
+		return
+	}
+	for _, v := range st.Invites {
 		if canManage(actor, v.OrganizationID, "groups:manage") {
 			out = append(out, viewInvite(v))
 		}

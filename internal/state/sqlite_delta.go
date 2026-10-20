@@ -91,6 +91,7 @@ func (b *sqliteBackend) cache(s State) error {
 	}
 	b.rows = rows
 	b.grants = grantRows(s.Users)
+	b.members = membershipRows(s.Groups)
 	return nil
 }
 func placeholders(n int) string {
@@ -157,11 +158,16 @@ func (b *sqliteBackend) save(next State) error {
 	if e = saveGrantDelta(tx, "user_services", "service_id", b.grants, grants, func(u userGrants) []string { return u.serviceIDs }); e != nil {
 		return e
 	}
+	members := membershipRows(next.Groups)
+	if e = saveMembershipDelta(tx, b.members, members); e != nil {
+		return e
+	}
 	if e = tx.Commit(); e != nil {
 		return e
 	}
 	b.rows = after
 	b.grants = grants
+	b.members = members
 	return nil
 }
 func saveGrantDelta(tx *sql.Tx, table, column string, before, after map[string]userGrants, ids func(userGrants) []string) error {

@@ -48,7 +48,14 @@ func (s *Server) cancelUnauthorizedRequests() {
 }
 func (s *Server) listGroups(w http.ResponseWriter, r *http.Request, actor User) {
 	out := []Group{}
-	for _, g := range s.store.snapshot().Groups {
+	filter := directoryFilter(actor)
+	filter.All = hasPermission(actor, "groups:manage")
+	filter.MemberID = actor.ID
+	st, ok := s.directory(w, r, "groups", filter)
+	if !ok {
+		return
+	}
+	for _, g := range st.Groups {
 		if canManage(actor, g.OrganizationID, "groups:manage") || containsID(g.MemberIDs, actor.ID) {
 			if !canManage(actor, g.OrganizationID, "groups:manage") {
 				g.MemberIDs = nil
