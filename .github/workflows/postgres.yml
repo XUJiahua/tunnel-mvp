@@ -36,6 +36,7 @@ jobs:
       - name: Real database concurrency, constraints, recovery and proxy fencing
         run: |
           go test -race -count=1 -timeout=10m -v ./internal/state ./cmd/tunnel -run Postgres
+          TUNNEL_TEST_STORAGE=postgres go test -race -count=1 -timeout=2m ./internal/control -run 'Postgres|TestRealTunnelProxyAndRevocation|TestOIDCStartupFailureReleasesStore'
           TUNNEL_TEST_STORAGE=postgres go test -race -count=1 -timeout=10m ./internal/control
 
       - uses: pnpm/action-setup@v4

@@ -37,11 +37,15 @@ type fixture struct {
 	dir    string
 }
 
-func setup(t *testing.T) *fixture {
+func prepareTestStorage(t *testing.T) {
 	t.Helper()
 	if os.Getenv("TUNNEL_TEST_STORAGE") == "postgres" {
 		t.Setenv("TUNNEL_POSTGRES_DSN", testpostgres.Database(t))
 	}
+}
+func setup(t *testing.T) *fixture {
+	t.Helper()
+	prepareTestStorage(t)
 	h := httptest.NewUnstartedServer(nil)
 	dir := t.TempDir()
 	s, err := New(config.Server{PublicURL: "http://" + h.Listener.Addr().String(), AccessURL: "http://apps.localhost:" + strconv.Itoa(h.Listener.Addr().(*net.TCPAddr).Port), DataDir: dir, Storage: os.Getenv("TUNNEL_TEST_STORAGE")}, testPassword)

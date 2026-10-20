@@ -353,6 +353,7 @@ func TestOIDCConcurrentDisableBeforeSessionIssuance(t *testing.T) {
 	}
 }
 func TestOIDCStartupFailureReleasesStore(t *testing.T) {
+	prepareTestStorage(t)
 	t.Setenv("TUNNEL_OIDC_CLIENT_SECRET", "")
 	dir := t.TempDir()
 	cfg := config.Server{PublicURL: "http://localhost:8080", AccessURL: "http://apps.localhost:8080", DataDir: dir, Storage: os.Getenv("TUNNEL_TEST_STORAGE"), OIDC: config.OIDC{Issuer: "https://idp.example", ClientID: "console"}}
