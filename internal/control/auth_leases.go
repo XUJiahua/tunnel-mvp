@@ -17,6 +17,7 @@ type authLease struct {
 	cancel     context.CancelFunc
 	ctx        context.Context
 	generation uint64
+	until      time.Time
 	stopped    bool
 }
 
@@ -31,6 +32,17 @@ func (l *authLease) renew(until time.Time) {
 	if l.stopped || l.ctx.Err() != nil {
 		return
 	}
+	// Timer delivery can lag behind its deadline (scheduler pause/contention).
+	// A queued expiration must not lose a race to a delayed renewal.
+	if !l.until.IsZero() && !time.Now().Before(l.until) {
+		l.stopped = true
+		if l.timer != nil {
+			l.timer.Stop()
+		}
+		l.cancel()
+		return
+	}
+	l.until = until
 	l.generation++
 	generation := l.generation
 	if l.timer != nil {
