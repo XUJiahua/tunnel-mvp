@@ -114,14 +114,13 @@ func (s *Server) refreshSharedAuth(ctx context.Context) {
 		sessions[r.sessionKey] = true
 		services[r.serviceID] = true
 	}
-	s.poolMu.Lock()
-	for _, p := range s.pools {
+	pools := s.snapshotPools()
+	for _, p := range pools {
 		services[p.service.ID] = true
 		if p.sessionKey != "" && p.sessionKey != "probe" {
 			sessions[p.sessionKey] = true
 		}
 	}
-	s.poolMu.Unlock()
 	keys := func(set map[string]bool) []string {
 		out := make([]string, 0, len(set))
 		for k := range set {
@@ -176,7 +175,12 @@ func (s *Server) refreshSharedAuth(ctx context.Context) {
 		}
 	}
 	s.poolMu.Lock()
-	for key, pool := range s.pools {
+	for key, pool := range pools {
+		// Only retire the exact transport covered by this proof. A request may
+		// have created or replaced the same key while the database read ran.
+		if current, ok := s.pools[key]; !ok || current.transport != pool.transport {
+			continue
+		}
 		svc, found := targets[pool.service.ID]
 		valid := found && sameRoute(pool.service, svc)
 		if pool.sessionKey != "" && pool.sessionKey != "probe" {
