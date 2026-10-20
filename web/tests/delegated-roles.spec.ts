@@ -5,8 +5,9 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import http from "node:http";
 import { createHash } from "node:crypto";
+// Fixed listeners stay below the Linux runner ephemeral port range (32768+).
 const root = resolve(process.cwd(), ".."),
-  url = "http://localhost:33880",
+  url = "http://localhost:31880",
   password = "agent-instance-e2e-password-123";
 let dir: string, server: ChildProcess, upstream: http.Server;
 const processes: ChildProcess[] = [];
@@ -30,9 +31,9 @@ test.beforeAll(async () => {
   writeFileSync(
     resolve(dir, "server.json"),
     JSON.stringify({
-      listen: "127.0.0.1:33880",
+      listen: "127.0.0.1:31880",
       publicURL: url,
-      accessURL: "http://apps.localhost:33880",
+      accessURL: "http://apps.localhost:31880",
       dataDir: resolve(dir, "data"),
       storage: process.env.TUNNEL_TEST_STORAGE || "json",
     }),
@@ -83,7 +84,7 @@ test.beforeAll(async () => {
     socket.on("end", () => socket.end());
     socket.on("error", () => {});
   });
-  await new Promise<void>((done) => upstream.listen(33882, "127.0.0.1", done));
+  await new Promise<void>((done) => upstream.listen(31882, "127.0.0.1", done));
 });
 test.afterAll(async () => {
   for (const c of processes.reverse()) await stop(c);
@@ -137,7 +138,7 @@ test("delegated organization roles UI, bounded permissions and live member revoc
     app = await api("/services", "POST", {
       name: "Delegated app",
       siteID: site.id,
-      url: "http://127.0.0.1:33882",
+      url: "http://127.0.0.1:31882",
     });
   const config = resolve(dir, "agent.json");
   writeFileSync(
@@ -145,7 +146,7 @@ test("delegated organization roles UI, bounded permissions and live member revoc
     JSON.stringify({
       serverURL: url,
       siteID: site.id,
-      allow: [{ cidr: "127.0.0.0/8", ports: [33882] }],
+      allow: [{ cidr: "127.0.0.0/8", ports: [31882] }],
     }),
   );
   start(["agent", "-c", config], { TUNNEL_AGENT_TOKEN: token });

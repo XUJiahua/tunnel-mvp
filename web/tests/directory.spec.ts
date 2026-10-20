@@ -4,13 +4,14 @@ import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 
-const root = resolve(process.cwd(), ".."), url = "http://localhost:35880";
+// Avoid collisions with outbound sockets in the runner ephemeral port range.
+const root = resolve(process.cwd(), ".."), url = "http://localhost:32080";
 const password = "directory-e2e-password-123";
 let dir: string, server: ChildProcess;
 test.beforeAll(async () => {
   dir = mkdtempSync(resolve(tmpdir(), "tunnel-directory-e2e-"));
   writeFileSync(resolve(dir, "server.json"), JSON.stringify({
-    listen: "127.0.0.1:35880", publicURL: url, accessURL: "http://apps.localhost:35880",
+    listen: "127.0.0.1:32080", publicURL: url, accessURL: "http://apps.localhost:32080",
     dataDir: resolve(dir, "data"), storage: process.env.TUNNEL_TEST_STORAGE || "json",
   }));
   server = spawn(resolve(root, "bin/tunnel"), ["server", "-c", resolve(dir, "server.json")], {
