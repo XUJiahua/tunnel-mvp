@@ -129,3 +129,28 @@ func TestPostgresRuntimeFencesRealAgentStreams(t *testing.T) {
 		t.Fatal("crash latch bypassed", e)
 	}
 }
+
+// Inspect actual canonical database rows and the credential registry, rather
+// than assuming a PostgreSQL runtime has the local JSON backend's state file.
+func checkPostgresSecrets(t *testing.T, dsn string, secrets ...string) {
+	t.Helper()
+	db, err := sql.Open("postgres", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	for _, table := range []string{"meta", "organizations", "roles", "users", "sites", "services", "groups", "invitations", "agents", "credentials"} {
+		var rows string
+		err = db.QueryRowContext(ctx, `SELECT coalesce(jsonb_agg(to_jsonb(t)),'[]'::jsonb)::text FROM tunnel_state.`+table+` t`).Scan(&rows)
+		if err != nil {
+			t.Fatal("inspect persisted PostgreSQL rows", err)
+		}
+		for _, secret := range secrets {
+			if strings.Contains(rows, secret) {
+				t.Fatal("plaintext secret persisted in PostgreSQL", table)
+			}
+		}
+	}
+}

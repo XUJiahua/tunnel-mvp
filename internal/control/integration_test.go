@@ -290,6 +290,10 @@ func TestRealTunnelProxyAndRevocation(t *testing.T) {
 	if f.s.cfg.Storage == "sqlite" {
 		stateName = "state.db"
 	}
+	if f.s.cfg.Storage == "postgres" {
+		stateName = "state.postgres"
+		checkPostgresSecrets(t, os.Getenv("TUNNEL_POSTGRES_DSN"), token, testPassword)
+	}
 	for _, name := range []string{stateName, "audit.jsonl"} {
 		data, err := os.ReadFile(filepath.Join(f.dir, name))
 		if err != nil {
