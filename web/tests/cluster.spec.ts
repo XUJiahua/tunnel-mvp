@@ -29,6 +29,7 @@ function start(binary: string, args: string[], name: string, env: Record<string,
   const child = spawn(binary, args, { env: { ...process.env, TUNNEL_POSTGRES_DSN: activeDSN, ...env }, stdio: "pipe" });
   let log = "";
   const capture = (chunk: Buffer) => {
+    if (!dir) return;
     log = (log + chunk.toString()).slice(-200000);
     writeFileSync(resolve(dir, name + ".log"), log);
   };
@@ -137,6 +138,7 @@ test.describe("HA-4 real mixed-version cluster", () => {
       for (let i = 0; i < 2; i++) { try { await info.attach(`node-${i}`, { body: readFileSync(resolve(dir, `server-${i}.log`)), contentType: "text/plain" }); } catch {} }
     }
     if (dir) rmSync(dir, { recursive: true, force: true });
+    dir = "";
   });
 
   test("mixed routing, drain-preserved SSE, rolling rollback and paired fresh-database recovery", async ({ page, context }) => {

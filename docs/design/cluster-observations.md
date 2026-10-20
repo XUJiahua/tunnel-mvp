@@ -1,4 +1,4 @@
-# HA-4 共享观测与排空（实施中）
+# HA-4 共享观测与排空
 
 保留 PostgreSQL 基础 schema v3、portable 配置 v10、monitor.db 基础 schema v3 和 cluster-v1 流协议。共享审计、健康样本、节点报告使用独立 observation extension v1。旧 HA-3 节点可继续路由，但没有观测报告，控制台必须显示覆盖不完整；只有全体节点报告新鲜才可判断集群观测覆盖。
 
@@ -12,4 +12,4 @@
 
 排空 API 必须指定实际 nodeID，防止 LB 错投；事务内重新校验全局管理员后撤销该节点路由 ready。心跳不能重新发布已排空路由。排空时 healthz 返回 503、新应用和 Agent 连接拒绝；管理 API 保留用于解除排空。既有 WS/SSE 和 Agent 通道继续授权重证，正常完成或撤权后关闭。排空不是强制迁移，也不自动终止长流；停止节点前要检查活动通道，设置业务允许的等待上限。
 
-本分支尚待 PostgreSQL 15/18、真实双节点、浏览器、混合版本与备份恢复验收。未完成的演练不记为通过。
+自动化验收覆盖 PostgreSQL 15/18、真实双节点 API/故障，以及真实 CLI/Agent/浏览器的 HA-3 混跑、逐节点升级/回滚与全新数据库配对恢复。运行入口分别为 `TestPostgresCluster*`、`TestObservationJournal*` 和 `web/tests/cluster.spec.ts`。结果以 [PR #31](https://github.com/XUJiahua/tunnel-mvp/pull/31) 最终提交的 CI 为准；目标宿主机、外部 LB/TLS、数据库主备切换及恢复 SLO 另行验收。
