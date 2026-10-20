@@ -1,6 +1,8 @@
 package state
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -33,6 +35,8 @@ type Store struct {
 	disk              backend
 	lock              *flock.Flock
 	closed            bool
+	epoch             string
+	revision          uint64
 }
 
 func Filename(kind string) (string, error) {
@@ -116,6 +120,12 @@ func Open(dir, kind string, initialize func() (State, error)) (*Store, error) {
 		return nil, err
 	}
 	s := &Store{lock: lock}
+	var epoch [16]byte
+	if _, err = rand.Read(epoch[:]); err != nil {
+		_ = lock.Close()
+		return nil, err
+	}
+	s.epoch = hex.EncodeToString(epoch[:])
 	success := false
 	defer func() {
 		if !success {
@@ -203,6 +213,7 @@ func (s *Store) Update(fn func(*State) error) error {
 		return err
 	}
 	s.state = Clone(next)
+	s.revision++
 	return nil
 }
 func (s *Store) Close() error {

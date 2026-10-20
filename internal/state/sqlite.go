@@ -15,9 +15,10 @@ const SchemaVersion = 10
 const applicationID = 0x54554e4c // TUNL
 
 type sqliteBackend struct {
-	db     *sql.DB
-	rows   []sqlTable
-	grants map[string]userGrants
+	db      *sql.DB
+	rows    []sqlTable
+	grants  map[string]userGrants
+	members map[string][]string
 }
 
 func connectSQLite(path string) (*sqliteBackend, error) {
@@ -98,6 +99,9 @@ func createSQLite(path string, s State) (*sqliteBackend, error) {
 		return nil, err
 	}
 	if err = tx.Commit(); err != nil {
+		return nil, err
+	}
+	if err = b.prepareMembershipIndex(State{}); err != nil {
 		return nil, err
 	}
 	if err = b.save(s); err != nil {
@@ -207,6 +211,9 @@ func openSQLite(path string) (backend, State, error) {
 		return nil, State{}, err
 	}
 	if _, err = b.db.Exec(resourceDomainIndex); err != nil {
+		return nil, State{}, err
+	}
+	if err = b.prepareMembershipIndex(s); err != nil {
 		return nil, State{}, err
 	}
 	if e := b.cache(s); e != nil {

@@ -178,7 +178,7 @@ func (s *Server) callbackOIDC(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.identitySync != nil {
 		checked := false
-		for _, u := range s.store.snapshot().Users {
+		for _, u := range s.store.identityUsers(id.Issuer, id.Subject) {
 			if !u.Disabled && u.Identity != nil && u.Identity.Issuer == id.Issuer && u.Identity.Subject == id.Subject {
 				checkCtx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 				result := s.identitySync.check(checkCtx, u)
@@ -208,7 +208,7 @@ func (s *Server) callbackOIDC(w http.ResponseWriter, r *http.Request) {
 		s.oidcFailed(w, r)
 		return
 	}
-	for _, u := range s.store.snapshot().Users {
+	for _, u := range s.store.identityUsers(id.Issuer, id.Subject) {
 		if !u.Disabled && u.Identity != nil && u.Identity.Issuer == id.Issuer && u.Identity.Subject == id.Subject {
 			if !s.identitySessionAllowed(session{UserID: u.ID, Method: "oidc", Issuer: id.Issuer, Subject: id.Subject}) {
 				break

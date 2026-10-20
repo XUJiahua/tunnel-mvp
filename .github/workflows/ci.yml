@@ -22,6 +22,13 @@ jobs:
           cache: pnpm
           cache-dependency-path: web/pnpm-lock.yaml
       - run: make build
+      - run: pnpm exec playwright install --with-deps chromium
+        working-directory: web
+      - name: Verify directory conflict recovery before the full regression
+        working-directory: web
+        run: |
+          pnpm exec playwright test tests/directory.spec.ts
+          TUNNEL_TEST_STORAGE=sqlite pnpm exec playwright test tests/directory.spec.ts
       - run: make test
       - name: Verify published v0.1.1 upgrade and rollback
         run: bash scripts/verify-upgrade.sh bin/tunnel "$RUNNER_TEMP/tunnel-upgrade"
@@ -29,8 +36,6 @@ jobs:
         with:
           name: upgrade-v0.1.1-report
           path: ${{ runner.temp }}/tunnel-upgrade/report.json
-      - run: pnpm exec playwright install --with-deps chromium
-        working-directory: web
       - run: pnpm run test:e2e
         working-directory: web
       - run: pnpm run test:e2e

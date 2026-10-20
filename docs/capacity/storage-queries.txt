@@ -1,0 +1,24 @@
+goos: linux
+goarch: amd64
+pkg: github.com/XUJiahua/tunnel-mvp/internal/state
+cpu: AMD EPYC 9V74 80-Core Processor                
+BenchmarkStorageQueries/login-snapshot-8         	     205	   2831115 ns/op	 1963346 B/op	    4075 allocs/op
+BenchmarkStorageQueries/login-snapshot-8         	     218	   2695345 ns/op	 2018686 B/op	    4076 allocs/op
+BenchmarkStorageQueries/login-snapshot-8         	     230	   2848334 ns/op	 1993637 B/op	    4076 allocs/op
+BenchmarkStorageQueries/login-point-8            	   14884	     43652 ns/op	    2752 B/op	      79 allocs/op
+BenchmarkStorageQueries/login-point-8            	   14284	     43216 ns/op	    2752 B/op	      79 allocs/op
+BenchmarkStorageQueries/login-point-8            	   14835	     41960 ns/op	    2752 B/op	      79 allocs/op
+BenchmarkStorageQueries/directory-snapshot-100-8 	     195	   2866837 ns/op	 2116597 B/op	    4296 allocs/op
+BenchmarkStorageQueries/directory-snapshot-100-8 	     219	   2878383 ns/op	 2166957 B/op	    4299 allocs/op
+BenchmarkStorageQueries/directory-snapshot-100-8 	     207	   2960747 ns/op	 2189035 B/op	    4299 allocs/op
+BenchmarkStorageQueries/directory-sql-100-8      	    1446	    375854 ns/op	  108584 B/op	    1323 allocs/op
+BenchmarkStorageQueries/directory-sql-100-8      	    1578	    383571 ns/op	  108566 B/op	    1323 allocs/op
+BenchmarkStorageQueries/directory-sql-100-8      	    1642	    385950 ns/op	  108605 B/op	    1323 allocs/op
+BenchmarkStorageQueries/membership-json-scan-8   	     772	    932956 ns/op	     624 B/op	      18 allocs/op
+BenchmarkStorageQueries/membership-json-scan-8   	     748	    803696 ns/op	     624 B/op	      18 allocs/op
+BenchmarkStorageQueries/membership-json-scan-8   	     684	    876206 ns/op	     624 B/op	      18 allocs/op
+BenchmarkStorageQueries/membership-index-8       	   34694	     17951 ns/op	     624 B/op	      18 allocs/op
+BenchmarkStorageQueries/membership-index-8       	   36534	     15672 ns/op	     624 B/op	      18 allocs/op
+BenchmarkStorageQueries/membership-index-8       	   37569	     16500 ns/op	     624 B/op	      18 allocs/op
+PASS
+ok  	github.com/XUJiahua/tunnel-mvp/internal/state	14.995s
