@@ -204,7 +204,9 @@ class Lab:
         def ready():
             nodes = self.client.api("/cluster/status")["nodes"]
             return len(nodes) == 2 and all(node["alive"] and node["fresh"] and not node["draining"] and
-                                          node.get("report", {}).get("backlog", {}).get("pending", -1) == 0 for node in nodes)
+                                          node.get("report", {}).get("backlog", {}).get("pending", -1) == 0 for node in nodes) and all(
+                self.client.api("/cluster/status", port=port)["localNodeID"] == node
+                for port, node in [(28444, "node-a"), (28445, "node-b")])
         eventually(ready, "both nodes reporting with empty observation queues")
 
     def health(self, port):
@@ -214,6 +216,8 @@ class Lab:
         self.client.api("/login", {"username": "admin", "password": self.password}, 28444)
         # Same secure console cookie must work on the other actual listener.
         assert self.client.status("/api/me", 28445) == 200
+        assert self.client.api("/cluster/status", port=28444)["localNodeID"] == "node-a"
+        assert self.client.api("/cluster/status", port=28445)["localNodeID"] == "node-b"
         site = self.client.api("/sites", {"name": "Disposable container site"})["site"]
         self.app = self.client.api("/services", {"name": "Private lab application", "siteID": site["id"], "url": "http://application:8080"})
         registration = self.client.api(f"/sites/{site['id']}/agents", {"name": "lab-agent"})
@@ -324,7 +328,7 @@ class Lab:
     def rotate_certificate(self):
         node_dir = self.runtime / "pki/node-b"
         before = hashlib.sha256((node_dir / "node.crt").read_bytes()).hexdigest()
-        eventually(lambda: self.client.status("/api/me", 28445) == 200, "B directed management listener recovered")
+        eventually(lambda: self.client.api("/cluster/status", port=28445)["localNodeID"] == "node-b", "B directed management listener recovered")
         self.client.api("/cluster/local/drain", {"nodeID": "node-b", "draining": True}, 28445)
         eventually(lambda: all(self.client.api("/cluster/status")["localNodeID"] == "node-a" for _ in range(8)), "LB removed B for certificate maintenance")
         self.compose("stop", "node-b")

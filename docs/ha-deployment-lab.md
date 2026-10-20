@@ -29,7 +29,7 @@ runtime 必须不存在。脚本生成独立项目名、新数据库卷、随机
 | `cluster` 内部网络 | PostgreSQL 与节点私有 mTLS，没有宿主机端口映射 |
 | `site` 内部网络 | Agent 与应用，Server/HAProxy 不加入 |
 
-验收客户端将实验域名解析到 loopback，无需修改 hosts；Agent 使用 Docker DNS。HAProxy 保留公共 Host，主动检查 `/healthz`，只把 200 视为就绪；关闭请求重试，不重复执行 POST。定向管理入口绕过健康检查以允许解除排空，必须保持 loopback；此配置不能直接用作公网生产配置。
+验收客户端将实验域名解析到 loopback，无需修改 hosts；Agent 使用 Docker DNS。HAProxy 保留公共 Host，主动检查 `/healthz`，只把 200 视为就绪；关闭请求重试，不重复执行 POST。配置通过 Docker DNS 动态更新后端地址，避免容器重启后 IP 变化导致错误路由；恢复检查还验证两个定向入口实际响应的 localNodeID。定向管理入口绕过健康检查以允许解除排空，必须保持 loopback；此配置不能直接用作公网生产配置。
 
 ## 自动验证内容
 
