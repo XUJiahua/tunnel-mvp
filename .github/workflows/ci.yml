@@ -116,3 +116,66 @@ jobs:
         with:
           name: keycloak-e2e-${{ matrix.storage }}-failure
           path: web/test-results
+
+  candidate-packages:
+    # Candidate archives are review artifacts. This job cannot push tags or
+    # publish a Release, and only runs after the complete integration gates.
+    if: github.event_name == 'pull_request' && github.base_ref == 'main' && startsWith(github.head_ref, 'release/')
+    needs: [verify, cross-build, keycloak-e2e]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.2'
+          cache: true
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: web/package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - uses: goreleaser/goreleaser-action@v7
+        with:
+          version: v2.17.1
+          install-only: true
+      - name: Prepare local candidate tag without publishing
+        env:
+          CANDIDATE_BRANCH: ${{ github.head_ref }}
+        run: |
+          candidate_tag="${CANDIDATE_BRANCH#release/}"
+          [[ "$candidate_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+$ ]]
+          if git rev-parse --verify "refs/tags/$candidate_tag" >/dev/null 2>&1; then
+            test "$(git rev-parse "refs/tags/$candidate_tag^{commit}")" = "$(git rev-parse HEAD)"
+          else
+            git tag "$candidate_tag"
+          fi
+          printf 'CANDIDATE_TAG=%s\n' "$candidate_tag" >> "$GITHUB_ENV"
+      - name: Build all candidate packages without publishing
+        run: goreleaser release --skip=publish --clean --parallelism 1
+        env:
+          NEXT_TELEMETRY_DISABLED: '1'
+      - name: Verify matrix, checksums, complete archives and operations content
+        run: python3 scripts/verify-release.py dist --version "${CANDIDATE_TAG#v}"
+      - name: Exercise actual packaged candidate with published v0.1.1
+        run: |
+          mkdir "$RUNNER_TEMP/candidate-extracted"
+          tar -xzf "dist/tunnel_${CANDIDATE_TAG#v}_linux_amd64.tar.gz" -C "$RUNNER_TEMP/candidate-extracted" tunnel
+          bash scripts/verify-upgrade.sh "$RUNNER_TEMP/candidate-extracted/tunnel" "$RUNNER_TEMP/candidate-upgrade"
+          cp "$RUNNER_TEMP/candidate-upgrade/report.json" dist/upgrade-v0.1.1-report.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: single-instance-candidate-${{ github.event.pull_request.head.sha }}
+          retention-days: 14
+          if-no-files-found: error
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/checksums.txt
+            dist/upgrade-v0.1.1-report.json

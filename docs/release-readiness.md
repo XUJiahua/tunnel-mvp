@@ -27,6 +27,8 @@
 
 发布工作流通过全部门禁后，校验公开附件与本地候选一致；先检查草稿再公开。下载包应在新目录完成最小启动/访问验收。代码整合、候选验证和正式公开发布分别记录结果，未执行的步骤不得标记完成。
 
+面向 main、分支名为 `release/vX.Y.Z-rc.N` 的整合 PR，在完整 verify、六平台编译、双后端原生 Keycloak 通过后运行 candidate-packages。任务只创建本地标签，以准确 head commit 生成候选包；不推送远端标签、不公开 Release。校验六包完整性并对实际解压的 Linux 包执行旧版升级，最后上传包/checksums/升级报告到同次 Actions 的 candidate artifact（保留 14 天）。通过该 artifact 下载候选，核对 tunnel version 的 commit 与 PR head 一致；macOS/Windows 包仍只是构建产物，实机未验收。
+
 ## 阶段三：目标环境试运行
 
 需要一个公网 HTTPS 入口、两处真实内网及实际应用/IdP。每站点两个独立 Agent，先定义并发、上传、延迟、恢复时间和持续时长，再采集混合流量及故障证据。覆盖网络黑洞、IdP 不可用、控制面重启、磁盘异常和新主机配对恢复。只有测试站点可执行破坏性故障注入。
