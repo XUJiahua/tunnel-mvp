@@ -32,7 +32,7 @@ jobs:
       TUNNEL_TEST_POSTGRES_DSN: postgres://postgres:tunnel-test-only@127.0.0.1:5432/postgres?sslmode=disable
       TUNNEL_REQUIRE_POSTGRES_TESTS: '1'
       TUNNEL_REQUIRE_HA3_TESTS: '1'
-      TUNNEL_TEST_HA3_BINARY: ${{ runner.temp }}/tunnel-ha3-binary
+      TUNNEL_TEST_HA3_BINARY: /tmp/tunnel-ha3-binary
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
