@@ -39,21 +39,22 @@ type pgMetadata struct {
 // PostgresRepository owns a pinned connection: its session lock can never be
 // renewed on a replacement connection. There is no retained authorization cache.
 type PostgresRepository struct {
-	mu            sync.Mutex
-	db            *sql.DB
-	conn          *sql.Conn
-	exclusive     bool
-	runtime       bool
-	owner         string
-	pid           int
-	closed        atomic.Bool
-	lost          atomic.Bool
-	failures      atomic.Uint64
-	loss          chan struct{}
-	lossOnce      sync.Once
-	cancel        context.CancelFunc
-	wg            sync.WaitGroup
-	directoryLock io.Closer
+	mu             sync.Mutex
+	db             *sql.DB
+	conn           *sql.Conn
+	exclusive      bool
+	runtime        bool
+	owner          string
+	authPolicyHash string
+	pid            int
+	closed         atomic.Bool
+	lost           atomic.Bool
+	failures       atomic.Uint64
+	loss           chan struct{}
+	lossOnce       sync.Once
+	cancel         context.CancelFunc
+	wg             sync.WaitGroup
+	directoryLock  io.Closer
 }
 type pgOpenOptions struct {
 	exclusive, runtime, empty, recover bool
@@ -74,7 +75,7 @@ func pgSafeError(err error) error {
 	if err == nil {
 		return nil
 	}
-	if errors.Is(err, ErrRevisionConflict) || errors.Is(err, ErrPostgresBusy) || errors.Is(err, ErrPostgresRecovery) || errors.Is(err, ErrPostgresSchema) || errors.Is(err, ErrDirectoryChanged) || errors.Is(err, ErrDirectoryQuery) {
+	if errors.Is(err, ErrAuthCapacity) || errors.Is(err, ErrAuthChanged) || errors.Is(err, ErrAuthPolicy) || errors.Is(err, ErrAuthUnavailable) || errors.Is(err, ErrRevisionConflict) || errors.Is(err, ErrPostgresBusy) || errors.Is(err, ErrPostgresRecovery) || errors.Is(err, ErrPostgresSchema) || errors.Is(err, ErrDirectoryChanged) || errors.Is(err, ErrDirectoryQuery) {
 		return err
 	}
 	var pg *pq.Error
@@ -169,6 +170,20 @@ func openPostgres(ctx context.Context, dsn string, options pgOpenOptions) (*Post
 		}
 	} else if options.empty {
 		return nil, fmt.Errorf("PostgreSQL already initialized; refusing to overwrite")
+	}
+	if present {
+		var version int
+		if err = tx.QueryRowContext(ctx, `SELECT schema_version FROM tunnel_state.meta WHERE singleton`).Scan(&version); err != nil {
+			return nil, pgSafeError(err)
+		}
+		if version == 1 {
+			if err = pgCreateAuthSchema(ctx, tx); err != nil {
+				return nil, pgSafeError(err)
+			}
+			if _, err = tx.ExecContext(ctx, `UPDATE tunnel_state.meta SET schema_version=$1,revision=revision+1 WHERE singleton`, PostgresSchemaVersion); err != nil {
+				return nil, pgSafeError(err)
+			}
+		}
 	}
 	meta, err := pgReadMeta(ctx, tx, " FOR SHARE")
 	if err != nil {
@@ -325,12 +340,18 @@ func (p *PostgresRepository) Snapshot() State {
 	return st.State
 }
 func (p *PostgresRepository) Update(fn func(*State) error) error {
-	return p.transact(context.Background(), nil, fn)
+	return p.transact(context.Background(), nil, nil, fn)
 }
 func (p *PostgresRepository) UpdateAtRevision(ctx context.Context, revision uint64, fn func(*State) error) error {
-	return p.transact(ctx, &revision, fn)
+	return p.transact(ctx, &revision, nil, fn)
 }
-func (p *PostgresRepository) transact(ctx context.Context, expected *uint64, fn func(*State) error) error {
+func (p *PostgresRepository) UpdateAuthenticated(ctx context.Context, authorize func(State, AuthData, time.Time) error, fn func(*State) error) error {
+	if authorize == nil {
+		return ErrAuthChanged
+	}
+	return p.transact(ctx, nil, authorize, fn)
+}
+func (p *PostgresRepository) transact(ctx context.Context, expected *uint64, authorize func(State, AuthData, time.Time) error, fn func(*State) error) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if err := p.check(); err != nil {
@@ -361,6 +382,31 @@ func (p *PostgresRepository) transact(ctx context.Context, expected *uint64, fn 
 	if err != nil {
 		return p.failed(err, false)
 	}
+	if err = p.authPolicy(ctx, tx); err != nil {
+		return p.failed(err, false)
+	}
+	now, err := pgAuthNow(ctx, tx)
+	if err != nil {
+		return p.failed(err, false)
+	}
+	if err = pgAuthCleanup(ctx, tx, now); err != nil {
+		return p.failed(err, false)
+	}
+	auth, err := pgAuthLoad(ctx, tx, "true")
+	if err != nil {
+		return p.failed(err, false)
+	}
+	auth.Clean(now)
+	if authorize != nil {
+		if err = authorize(st, auth, now); err != nil {
+			return err
+		}
+	}
+	before := Clone(st)
+	previousAuth, err := cloneAuth(auth)
+	if err != nil {
+		return err
+	}
 	if err = fn(&st); err != nil {
 		return err
 	}
@@ -370,6 +416,13 @@ func (p *PostgresRepository) transact(ctx context.Context, expected *uint64, fn 
 	if err = p.check(); err != nil {
 		return err
 	}
+	authReconcile(&auth, before, st, now)
+	if err = validateAuth(auth, now); err != nil {
+		return err
+	}
+	if err = pgAuthSave(ctx, tx, previousAuth, auth); err != nil {
+		return p.failed(err, false)
+	}
 	if err = pgWriteState(ctx, tx, st); err != nil {
 		return p.failed(err, false)
 	}
@@ -378,6 +431,9 @@ func (p *PostgresRepository) transact(ctx context.Context, expected *uint64, fn 
 	}
 	if err = p.check(); err != nil {
 		return err
+	}
+	if err = pgAuthEvent(ctx, tx, meta.Revision+1, "config"); err != nil {
+		return p.failed(err, false)
 	}
 	return p.failed(tx.Commit(), false)
 }

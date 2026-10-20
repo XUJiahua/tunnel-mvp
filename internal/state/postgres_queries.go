@@ -95,53 +95,58 @@ func (p *PostgresRepository) UserContext(id string) (State, bool, error) {
 	var out State
 	var found bool
 	err := p.read(context.Background(), func(ctx context.Context, tx *sql.Tx, _ pgMetadata) error {
-		v, ok, err := pgOne(ctx, tx, "users", "id=$1", id)
-		if err != nil || !ok {
-			return err
-		}
-		u := v.(User)
-		out.Users = []User{u}
-		if u.RoleID != "" {
-			v, ok, err = pgOne(ctx, tx, "roles", "id=$1", u.RoleID)
-			if err != nil {
-				return err
-			}
-			if !ok || v.(Role).OrganizationID != u.OrganizationID {
-				return fmt.Errorf("invalid role projection")
-			}
-			out.Roles = []Role{v.(Role)}
-		}
-		rows, err := tx.QueryContext(ctx, `SELECT g.id,g.payload FROM tunnel_state.group_members m JOIN tunnel_state.groups g ON g.id=m.group_id WHERE m.user_id=$1 ORDER BY g.position`, id)
-		if err != nil {
-			return err
-		}
-		defer rows.Close()
-		for rows.Next() {
-			var groupID string
-			var raw []byte
-			if err = rows.Scan(&groupID, &raw); err != nil {
-				return err
-			}
-			v, err = pgPayload("groups", groupID, raw)
-			if err != nil {
-				return err
-			}
-			g := v.(Group)
-			if g.OrganizationID != u.OrganizationID || !slices.Contains(g.MemberIDs, id) {
-				return fmt.Errorf("invalid member projection")
-			}
-			out.Groups = append(out.Groups, g)
-		}
-		if err = rows.Err(); err != nil {
-			return err
-		}
-		found = true
-		return nil
+		var err error
+		out, found, err = pgUserContext(ctx, tx, id)
+		return err
 	})
 	if err != nil {
 		return State{}, false, err
 	}
 	return out, found, nil
+}
+func pgUserContext(ctx context.Context, tx *sql.Tx, id string) (State, bool, error) {
+	var out State
+	v, ok, err := pgOne(ctx, tx, "users", "id=$1", id)
+	if err != nil || !ok {
+		return State{}, false, err
+	}
+	u := v.(User)
+	out.Users = []User{u}
+	if u.RoleID != "" {
+		v, ok, err = pgOne(ctx, tx, "roles", "id=$1", u.RoleID)
+		if err != nil {
+			return State{}, false, err
+		}
+		if !ok || v.(Role).OrganizationID != u.OrganizationID {
+			return State{}, false, fmt.Errorf("invalid role projection")
+		}
+		out.Roles = []Role{v.(Role)}
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT g.id,g.payload FROM tunnel_state.group_members m JOIN tunnel_state.groups g ON g.id=m.group_id WHERE m.user_id=$1 ORDER BY g.position`, id)
+	if err != nil {
+		return State{}, false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var groupID string
+		var raw []byte
+		if err = rows.Scan(&groupID, &raw); err != nil {
+			return State{}, false, err
+		}
+		v, err = pgPayload("groups", groupID, raw)
+		if err != nil {
+			return State{}, false, err
+		}
+		g := v.(Group)
+		if g.OrganizationID != u.OrganizationID || !slices.Contains(g.MemberIDs, id) {
+			return State{}, false, fmt.Errorf("invalid member projection")
+		}
+		out.Groups = append(out.Groups, g)
+	}
+	if err = rows.Err(); err != nil {
+		return State{}, false, err
+	}
+	return out, true, nil
 }
 func pgDirectorySQL(q DirectoryQuery, after int) (string, []any) {
 	args := []any{after}
