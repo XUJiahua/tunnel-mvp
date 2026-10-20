@@ -1,10 +1,10 @@
 # 共享认证生命周期（HA-2）
 
-PostgreSQL 后端把会话、应用票据、应用 Cookie 索引、登录限流、OIDC state/nonce/PKCE、注销重放记录和 Keycloak 状态放入私有认证表。JSON/SQLite 继续使用进程内认证状态。本阶段保持生产 Server 单活；双节点测试通过私有构造器注入两个独立 Repository，不提供跳过运行锁的部署参数。跨节点 Agent owner、generation、内部 mTLS 与数据转发属于 HA-3。
+PostgreSQL 后端把会话、应用票据、应用 Cookie 索引、登录限流、OIDC state/nonce/PKCE、注销重放记录和 Keycloak 状态放入私有认证表。JSON/SQLite 继续使用进程内认证状态。HA-2 初始阶段保持单活；[HA-3](cluster-routing.md) 在此基础上增加显式集群模式及节点身份/路由，原有私有构造器仍用于确定性故障注入。
 
 ## 数据与原子性
 
-数据库 schema v2 在启动事务中升级 v1；配置与 portable backup 仍为 v10。`auth_records` 使用种类/索引联合主键，session/user、grant/session 外键延迟到提交检查；会话公开 ID 唯一。浏览器 bearer、OIDC state 和浏览器绑定 Cookie 仅保存 SHA-256 索引；短期 nonce/PKCE verifier 供跨节点回调使用，ID/access token、client secret 不落库。认证表不进入 portable backup 或运维归档，恢复到新库要求重新登录。
+HA-2 的数据库 schema v2 在启动事务中升级 v1，HA-3 再升级为 v3；配置与 portable backup 仍为 v10。`auth_records` 使用种类/索引联合主键，session/user、grant/session 外键延迟到提交检查；会话公开 ID 唯一。浏览器 bearer、OIDC state 和浏览器绑定 Cookie 仅保存 SHA-256 索引；短期 nonce/PKCE verifier 供跨节点回调使用，ID/access token、client secret 不落库。认证表不进入 portable backup 或运维归档，恢复到新库要求重新登录。
 
 配置和认证写入都先锁 singleton meta 行，再读取、验证和提交。配置写入比较变更前后用户，禁用、改密、身份绑定及角色变更在同一事务删除旧会话和子凭据；应用路由变更清除相关票据/凭据。直接授权和组变更保留设备会话，下一次请求使用最新权限，已有流通过周期证明撤销。控制面的配置变更在数据库锁内再次验证调用会话和当前有效用户/权限，旧调用者不能等待其他事务撤销后继续提交。目录查询绑定鉴权时的配置修订，期间变更返回 409 重试。
 
@@ -24,7 +24,7 @@ PostgreSQL 后端把会话、应用票据、应用 Cookie 索引、登录限流�
 
 共享身份检查以 check ID 和短期 pending 状态合并跨节点请求，旧完成结果不能覆盖新检查。成功 enabled 证明有有效期和 epoch；证明过期或禁用后旧 OIDC 会话删除/拒绝，后续 enabled 结果不能复活旧 Cookie。请求失败不延长旧证明，不把先前成功冒充新的登录检查。密码恢复会话不依赖该证明。
 
-所有节点必须使用相同 publicURL、accessURL、OIDC 和桥接策略指纹。共享客户端不匹配即拒绝；生产单活 Server 在重启时改变策略会清空旧认证记录并发布策略事件。每个本地目录的私有 `node.id` 是 consumer 标识，不是节点证书，不能用于 HA-3 身份认证。
+所有节点必须使用相同 publicURL、accessURL、OIDC 和桥接策略指纹。共享客户端不匹配即拒绝；单活 Server 在重启时改变策略会清空旧认证记录并发布策略事件。每个本地目录的私有 `node.id` 是 consumer 标识，不是节点证书，不能代替 HA-3 的私有 CA 节点证书。集群模式还把协议与 CA 集纳入策略指纹，稳定 nodeID 同时作为 consumer 标识。
 
 生命周期 advisory lock 使用专用固定连接；请求查询使用独立连接池，最多四个连接（含固定连接）。请求取消可能由驱动丢弃查询连接，但不能释放运行锁。固定连接每秒探测，5 秒超时；锁/owner 丢失隔离整个 Server，保持离线恢复要求。
 

@@ -83,7 +83,13 @@ func (s *Server) configureCluster() error {
 	c.ctx, c.cancel = context.WithCancel(context.Background())
 	c.flows = map[string]clusterPeerFlow{}
 	c.outgoing = map[string]net.Conn{}
-	c.lease = newAuthLease(c.ctx, func() { s.fenceRuntime() }, clusterProofUntil(started, snapshot.Now, c.node.Expires))
+	c.lease = newAuthLease(c.ctx, func() {
+		// Lease callbacks hold the lease mutex. Cancel admission immediately,
+		// then drain outside it: connection paths can hold tunnelMu while
+		// checking the deadline.
+		c.cancel()
+		go s.fenceRuntime()
+	}, clusterProofUntil(started, snapshot.Now, c.node.Expires))
 	if !c.valid() {
 		return state.ErrClusterLease
 	}

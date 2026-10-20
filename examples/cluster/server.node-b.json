@@ -1,0 +1,16 @@
+{
+  "listen": "127.0.0.1:8082",
+  "publicURL": "https://tunnel.example.com",
+  "accessURL": "https://apps.example.com",
+  "storage": "postgres",
+  "dataDir": "/var/lib/tunnel/node-b",
+  "cluster": {
+    "enabled": true,
+    "nodeID": "node-b",
+    "listen": "10.20.0.12:8443",
+    "advertiseURL": "https://10.20.0.12:8443",
+    "caFile": "/etc/tunnel/cluster/ca.crt",
+    "certFile": "/etc/tunnel/cluster/node.crt",
+    "keyFile": "/etc/tunnel/cluster/node.key"
+  }
+}

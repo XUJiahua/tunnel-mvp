@@ -14,7 +14,7 @@
 
 以上是记录时状态；后续合并或发布必须更新本表，不能把旧状态描述当成实时查询结果。#1–#22 的逐层审阅记录保留；不得只根据 #22 的 diff 判断完整版本内容。
 
-当前授权 schema/backup v10，接受旧 backup v1–v9；monitor schema v3 独立维护。GoReleaser 固定 2.17.1。JSON 默认、SQLite 与 PostgreSQL 可选，均为单活控制面；用户会话/票据在内存，多 Agent 不等于控制面 HA。
+当前授权 schema/backup v10，接受旧 backup v1–v9；monitor schema v3 独立维护。GoReleaser 固定 2.17.1。JSON 默认、SQLite 可选且保持单活；PostgreSQL schema v3 可显式启用 HA-3 集群，会话/票据共享。HA-4 观测聚合与完整滚动恢复仍待实施。
 
 ## 阶段一：收敛
 

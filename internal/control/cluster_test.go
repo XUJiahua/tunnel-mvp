@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -39,7 +40,15 @@ func (p *partitionedClusterRepository) ClusterHeartbeat(ctx context.Context, rep
 	return p.PostgresRepository.ClusterHeartbeat(ctx, reports)
 }
 
+func (p *partitionedClusterRepository) ClusterReleaseAgent(ctx context.Context, key string, generation uint64) error {
+	if p.blocked.Load() {
+		return context.DeadlineExceeded
+	}
+	return p.PostgresRepository.ClusterReleaseAgent(ctx, key, generation)
+}
+
 type clusterFixture struct {
+	ca clusterTestCA
 	*fixture
 	nodes               [2]*Server
 	selected, agentNode atomic.Int32
@@ -52,7 +61,7 @@ func newClusterFixture(t *testing.T) *clusterFixture {
 	t.Setenv("TUNNEL_POSTGRES_DSN", dsn)
 	ca := newClusterTestCA(t)
 	lb := httptest.NewUnstartedServer(nil)
-	f := &clusterFixture{}
+	f := &clusterFixture{ca: ca}
 	f.agentNode.Store(1)
 	handlers := make([]*httputil.ReverseProxy, 2)
 	for i, id := range []string{"node-a", "node-b"} {
@@ -344,6 +353,29 @@ func TestPostgresClusterRejectsForgedStreams(t *testing.T) {
 	}
 	// A valid CA signature alone is insufficient: the exact leaf fingerprint must
 	// belong to a currently registered incarnation.
+
+	forgedConfig := f.ca.node(t, "node-a")
+	forgedTLS, err := loadClusterTLS(forgedConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	forgedTLS.config.ServerName = "127.0.0.1"
+	forged, err := tls.Dial("tcp", owner.listener.Addr().String(), forgedTLS.config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	forged.SetDeadline(time.Now().Add(3 * time.Second))
+	rawEnvelope, _ := json.Marshal(envelope)
+	fmt.Fprintf(forged, "CONNECT %s HTTP/1.1\r\nHost: internal\r\nX-Tunnel-Stream: %s\r\n\r\n", clusterStreamPath, base64.RawURLEncoding.EncodeToString(rawEnvelope))
+	rejected, err := http.ReadResponse(bufio.NewReader(forged), &http.Request{Method: "CONNECT"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rejected.Body.Close()
+	forged.Close()
+	if rejected.StatusCode != 403 {
+		t.Fatal("unregistered leaf fingerprint accepted", rejected.StatusCode)
+	}
 	cfg := newClusterTestCA(t).node(t, "intruder")
 	untrusted, err := loadClusterTLS(cfg)
 	if err != nil {
@@ -370,5 +402,51 @@ func TestPostgresClusterRejectsForgedStreams(t *testing.T) {
 	res.Body.Close()
 	if res.StatusCode == 200 {
 		t.Fatal("public header granted private stream")
+	}
+}
+
+func TestPostgresClusterKeepsUpstreamTLSVerification(t *testing.T) {
+	f := newClusterFixture(t)
+	up := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, "verified-upstream") }))
+	t.Cleanup(up.Close)
+	site, token := f.site(t, "TLS site")
+	f.connectAgent(t, site, token, portOf(up.URL))
+	svc := f.service(t, site, "TLS app", up.URL)
+	ctx := context.WithValue(context.Background(), clusterAuthorityKey{}, clusterAuthority{Kind: "system"})
+	for _, trusted := range []bool{false, true} {
+		conn, err := f.s.dialSite(ctx, site.ID, svc.ID, "tcp", clusterTarget(svc))
+		if err != nil {
+			t.Fatal(err)
+		}
+		roots := x509.NewCertPool()
+		if trusted {
+			roots.AddCert(up.Certificate())
+		}
+		inner := tls.Client(conn, &tls.Config{RootCAs: roots, ServerName: "127.0.0.1", MinVersion: tls.VersionTLS12})
+		inner.SetDeadline(time.Now().Add(3 * time.Second))
+		err = inner.Handshake()
+		if !trusted {
+			inner.Close()
+			if err == nil {
+				t.Fatal("untrusted upstream accepted")
+			}
+			continue
+		}
+		if err != nil {
+			inner.Close()
+			t.Fatal(err)
+		}
+		fmt.Fprint(inner, "GET / HTTP/1.1\r\nHost: upstream\r\nConnection: close\r\n\r\n")
+		res, err := http.ReadResponse(bufio.NewReader(inner), &http.Request{Method: "GET"})
+		if err != nil {
+			inner.Close()
+			t.Fatal(err)
+		}
+		body, err := io.ReadAll(res.Body)
+		res.Body.Close()
+		inner.Close()
+		if err != nil || string(body) != "verified-upstream" {
+			t.Fatal("upstream TLS stream", err, string(body))
+		}
 	}
 }

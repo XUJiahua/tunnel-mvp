@@ -71,7 +71,7 @@ func (s *Server) serviceTransport(svc Service, sessions ...string) *http.Transpo
 	t.MaxIdleConns = 32
 	t.MaxIdleConnsPerHost = 16
 	t.MaxConnsPerHost = 64
-	if session != "" {
+	if session != "" && (s.cluster == nil || svc.ConnectionMode == "session") {
 		t.MaxIdleConns = 1
 		t.MaxIdleConnsPerHost = 1
 		t.MaxConnsPerHost = 1
