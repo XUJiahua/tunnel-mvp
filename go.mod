@@ -6,6 +6,7 @@ require (
 	github.com/coreos/go-oidc/v3 v3.19.0
 	github.com/gofrs/flock v0.12.1
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674
+	github.com/lib/pq v1.12.3
 	github.com/rancher/remotedialer v0.6.2-0.20261014155149-1e594259f9fc
 	github.com/sirupsen/logrus v1.10.2
 	github.com/spf13/cobra v1.10.2
@@ -25,7 +26,6 @@ require (
 	github.com/go-viper/mapstructure/v2 v2.4.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
-	github.com/lib/pq v1.12.3
 	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect

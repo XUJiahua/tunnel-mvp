@@ -271,6 +271,8 @@ func RecoverPostgresRuntime(ctx context.Context, dir, dsn string, oldServerStopp
 	if !oldServerStopped {
 		return Summary{}, fmt.Errorf("stop or externally fence the old Server, then pass --old-server-stopped")
 	}
+	ctx, cancel := context.WithTimeout(ctx, pgOperationTimeout)
+	defer cancel()
 	p, err := postgresMaintenance(ctx, dir, dsn, pgOpenOptions{recover: true})
 	if err != nil {
 		return Summary{}, err

@@ -326,6 +326,9 @@ func TestPostgresMigrationAndPortableRestore(t *testing.T) {
 		t.Run(kind, func(t *testing.T) {
 			ctx := context.Background()
 			initial := organizationSample(t)
+			policy := EmptyAgentPolicy()
+			initial.Agents = []AgentRegistration{{ID: "agent-a", SiteID: "site-a", Name: "migrated", TokenHash: strings.Repeat("d", 64), CreatedAt: initial.Sites[0].CreatedAt, Policy: &policy}}
+			initial.Users[1].Identity = &Identity{Issuer: "https://idp.example.org/realm", Subject: "migrated-subject"}
 			source := t.TempDir()
 			local := mustOpen(t, source, kind, initial)
 			_ = local.Close()
@@ -458,5 +461,24 @@ func TestPostgresInitializationAndSchemaRefusal(t *testing.T) {
 	if p, e := OpenPostgres(context.Background(), dsn, func() (State, error) { t.Error("unknown schema reinitialized"); return initial, nil }); e == nil {
 		_ = p.Close()
 		t.Fatal("unknown schema accepted")
+	}
+}
+
+func TestPostgresRejectsDuplicateLegacyCredentials(t *testing.T) {
+	dsn := testpostgres.Database(t)
+	initial := sample(t)
+	p := mustPostgres(t, dsn, initial)
+	before := snapshotPostgres(t, p)
+	err := p.Update(func(s *State) error {
+		site := s.Sites[0]
+		site.ID = "duplicate"
+		s.Sites = append(s.Sites, site)
+		return nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "rotate duplicate legacy credentials") {
+		t.Fatal("duplicate credential not explained", err)
+	}
+	if !reflect.DeepEqual(before, snapshotPostgres(t, p)) {
+		t.Fatal("rejected duplicate credential changed data")
 	}
 }

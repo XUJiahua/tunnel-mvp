@@ -24,6 +24,23 @@ func pgTable(kind string) string { return "tunnel_state." + kind }
 
 const pgOwner = `organization_id TEXT GENERATED ALWAYS AS (coalesce(payload->>'organizationID','')) STORED NOT NULL REFERENCES tunnel_state.organizations(id) DEFERRABLE INITIALLY DEFERRED`
 
+// PostgreSQL also reserves every legacy site credential globally. Local stores
+// historically allowed two sites to reuse a hash; require rotating those before
+// import rather than silently dropping or changing either credential.
+func validatePostgresState(st *State) error {
+	if err := Validate(st); err != nil {
+		return err
+	}
+	tokens := map[string]bool{}
+	for _, site := range st.Sites {
+		if tokens[site.TokenHash] {
+			return fmt.Errorf("PostgreSQL requires distinct site credential hashes; rotate duplicate legacy credentials before migrating")
+		}
+		tokens[site.TokenHash] = true
+	}
+	return nil
+}
+
 func pgCreateSchema(ctx context.Context, tx *sql.Tx) error {
 	statements := []string{
 		`CREATE SCHEMA IF NOT EXISTS tunnel_state`,

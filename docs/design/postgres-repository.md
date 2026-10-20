@@ -28,7 +28,7 @@ Server 打开时还写持久 runtime_owner。正常关闭先取消应用流并�
 
 ## 迁移与验证
 
-停机 JSON/SQLite→新 PostgreSQL 数据库保留 ID、密码/令牌散列、授权、Agent 和未使用邀请。SQLite 在临时副本上读取/升级/重建派生索引，原文件字节不变；出现 journal/WAL/SHM 必须先完成原数据库恢复。目标库已初始化即拒绝覆盖。portable restore 校验后清空 pending 邀请，防止历史备份复活已消费凭据；跨三后端保持同一规则。
+停机 JSON/SQLite→新 PostgreSQL 数据库保留 ID、密码/令牌散列、授权、Agent 和未使用邀请。SQLite 在临时副本上读取/升级/重建派生索引，原文件字节不变；出现 journal/WAL/SHM 必须先完成原数据库恢复。目标库已初始化即拒绝覆盖。PostgreSQL 的全局 credential 唯一约束比历史本地存储更严格：多个站点复用 legacy token 时明确拒绝导入，要求先轮换重复凭据；不静默转换。portable restore 校验后清空 pending 邀请，防止历史备份复活已消费凭据；跨三后端保持同一规则。
 
 CI 使用 PostgreSQL 15、18 隔离服务，每个测试创建独立随机数据库，测试 DSN 所指库只用于创建/销毁测试库，不删其 schema。覆盖并发写无丢失、回调一次执行、CAS/重建重试、并发最后管理员、唯一值交换、跨组织 FK、注入写失败、跨语句一致读、跨客户端游标、固定连接终止、持久运行标记、三后端备份恢复及真实 Agent HTTP/WS/SSE。完整控制面回归另以 PostgreSQL 后端运行。
 

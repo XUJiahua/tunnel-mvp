@@ -140,7 +140,7 @@ func openPostgres(ctx context.Context, dsn string, options pgOpenOptions) (*Post
 		if initErr != nil {
 			return nil, initErr
 		}
-		if initErr = Validate(&initial); initErr != nil {
+		if initErr = validatePostgresState(&initial); initErr != nil {
 			return nil, initErr
 		}
 		if err = pgCreateSchema(ctx, tx); err != nil {
@@ -363,7 +363,7 @@ func (p *PostgresRepository) transact(ctx context.Context, expected *uint64, fn 
 	if err = fn(&st); err != nil {
 		return err
 	}
-	if err = Validate(&st); err != nil {
+	if err = validatePostgresState(&st); err != nil {
 		return err
 	}
 	if err = p.check(); err != nil {

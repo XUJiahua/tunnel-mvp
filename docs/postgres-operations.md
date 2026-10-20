@@ -32,7 +32,7 @@ export TUNNEL_POSTGRES_DSN='postgres://tunnel@db.internal/tunnel?sslmode=verify-
 ./tunnel server --storage postgres --data-dir /srv/tunnel-pg
 ```
 
-迁移保留未消费邀请、用户/组织/角色/组、应用、ID 与凭据散列；切换后重新登录，Agent 重连，旧活动流不能迁移。不要同时启动旧配置。SQLite 源有 sidecar 时先按原后端完成恢复再重试；不删除 sidecar 绕过检查。数据库已经初始化即拒绝覆写。
+迁移保留未消费邀请、用户/组织/角色/组、应用、ID 与凭据散列；切换后重新登录，Agent 重连，旧活动流不能迁移。不要同时启动旧配置。SQLite 源有 sidecar 时先按原后端完成恢复再重试；不删除 sidecar 绕过检查。数据库已经初始化即拒绝覆写。PostgreSQL 凭据注册表要求站点 token 散列全局唯一；若历史 JSON/SQLite 曾复用站点 token，迁移明确拒绝，先在原系统轮换重复凭据，不会静默改写源凭据。
 
 ## 离线备份、恢复与回退
 
