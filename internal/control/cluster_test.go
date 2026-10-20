@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -210,6 +211,11 @@ func assertClusterStreamsClosed(t *testing.T, stream *http.Response, ws *websock
 	ws.SetReadDeadline(time.Now().Add(time.Second))
 	if _, _, err := ws.ReadMessage(); err == nil {
 		t.Fatal("WebSocket remained open")
+	} else {
+		var timeout net.Error
+		if errors.As(err, &timeout) && timeout.Timeout() {
+			t.Fatal("WebSocket timed out instead of being closed")
+		}
 	}
 }
 func TestPostgresClusterRealRoutingAndRevocation(t *testing.T) {
@@ -256,11 +262,15 @@ func TestPostgresClusterPartitionFencesBeforeTakeoverWithoutPostReplay(t *testin
 	req, _ := http.NewRequest("POST", f.h.URL+"/commit", strings.NewReader("irreversible"))
 	req.Host = host
 	req.AddCookie(cookie)
+	commitStarted := time.Now()
 	commit, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer commit.Body.Close()
+	if time.Since(commitStarted) > 3*time.Second {
+		t.Fatal("SSE serialized another request in shared mode")
+	}
 	if commit.StatusCode != 200 {
 		t.Fatal("POST never reached upstream", commit.StatusCode)
 	}
