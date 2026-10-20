@@ -108,11 +108,14 @@ func newClusterFixture(t *testing.T) *clusterFixture {
 	return f
 }
 func (f *clusterFixture) connectAgent(t *testing.T, site Site, token string, ports ...int) context.CancelFunc {
+	return f.connectAgentInstance(t, site, "", token, ports...)
+}
+func (f *clusterFixture) connectAgentInstance(t *testing.T, site Site, instance, token string, ports ...int) context.CancelFunc {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- agent.Run(ctx, config.Agent{ServerURL: f.h.URL, SiteID: site.ID, Allow: []config.Rule{{CIDR: "127.0.0.0/8", Ports: ports}}}, token)
+		done <- agent.Run(ctx, config.Agent{ServerURL: f.h.URL, SiteID: site.ID, InstanceID: instance, RuntimeVersion: "cluster-test", Allow: []config.Rule{{CIDR: "127.0.0.0/8", Ports: ports}}}, token)
 	}()
 	t.Cleanup(func() {
 		cancel()
@@ -125,7 +128,18 @@ func (f *clusterFixture) connectAgent(t *testing.T, site Site, token string, por
 			t.Error("Agent did not stop")
 		}
 	})
-	waitFor(t, func() bool { return f.nodes[0].siteOnline(site.ID) })
+	waitFor(t, func() bool {
+		view, err := f.nodes[0].cluster.repo.ClusterRoutes(context.Background(), site.ID)
+		if err != nil {
+			return false
+		}
+		for _, route := range view.Routes {
+			if route.Agent.InstanceID == instance {
+				return true
+			}
+		}
+		return false
+	})
 	return cancel
 }
 func clusterUpstream(t *testing.T, posts *atomic.Int32) *httptest.Server {
@@ -222,8 +236,9 @@ func TestPostgresClusterRealRoutingAndRevocation(t *testing.T) {
 	f := newClusterFixture(t)
 	var posts atomic.Int32
 	up := clusterUpstream(t, &posts)
-	site, token := f.site(t, "HA site")
-	f.connectAgent(t, site, token, portOf(up.URL))
+	site, _ := f.site(t, "HA site")
+	registered, token := registerAgent(t, f.fixture, site, "registered remote Agent")
+	f.connectAgentInstance(t, site, registered.ID, token, portOf(up.URL))
 	svc := f.service(t, site, "HA app", up.URL)
 	cookie, host, _ := f.grant(t, svc, f.cookie)
 	if len(f.nodes[0].connectedAgents(site.ID)) != 0 {
@@ -249,6 +264,24 @@ func TestPostgresClusterRealRoutingAndRevocation(t *testing.T) {
 	if res.StatusCode == 200 {
 		t.Fatal("revoked grant accepted on A")
 	}
+	res, body = f.request(t, "POST", "/api/login", map[string]string{"username": "admin", "password": testPassword}, nil, "")
+	if res.StatusCode != 200 {
+		t.Fatalf("relogin %d %s", res.StatusCode, body)
+	}
+	f.cookie = res.Cookies()[0]
+	res, body = f.request(t, "GET", "/api/agents", nil, f.cookie, "")
+	if res.StatusCode != 200 || !strings.Contains(string(body), registered.ID) || !strings.Contains(string(body), "cluster-test") || strings.Contains(string(body), digest(token)) {
+		t.Fatalf("remote registered inventory %d %s", res.StatusCode, body)
+	}
+	res, body = f.request(t, "PATCH", "/api/sites/"+site.ID+"/agents/"+registered.ID, map[string]bool{"disabled": true}, f.cookie, "")
+	if res.StatusCode != 200 {
+		t.Fatalf("disable remote Agent %d %s", res.StatusCode, body)
+	}
+	view, err := f.nodes[0].cluster.repo.ClusterRoutes(context.Background(), site.ID)
+	if err != nil || len(view.Routes) != 0 {
+		t.Fatal("disabled registration retained route", err)
+	}
+	waitFor(t, func() bool { return len(f.nodes[1].connectedAgents(site.ID)) == 0 })
 }
 func TestPostgresClusterPartitionFencesBeforeTakeoverWithoutPostReplay(t *testing.T) {
 	f := newClusterFixture(t)
