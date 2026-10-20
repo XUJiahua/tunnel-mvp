@@ -131,13 +131,13 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	lim.Count++
 	s.auth.attempts["login"] = lim
 	s.auth.mu.Unlock()
-	found, _ := s.store.userByUsername(body.Username)
+	found, exists := s.store.userByUsername(body.Username)
 	hash := found.PasswordHash
 	if hash == "" {
 		hash = s.dummyHash
 	}
 	err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(body.Password))
-	if err != nil || found.ID == "" || found.Disabled || found.PasswordHash == "" {
+	if err != nil || !exists || found.ID == "" || found.Disabled || found.PasswordHash == "" {
 		s.audit("login_failed", body.Username, "", "")
 		fail(w, 401, "invalid username or password")
 		return

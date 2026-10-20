@@ -5,7 +5,10 @@ import "github.com/XUJiahua/tunnel-mvp/internal/state"
 func (s *Store) userByUsername(name string) (User, bool) {
 	if reader, ok := s.Repository.(state.LoginReader); ok {
 		u, found, err := reader.UserByUsername(name)
-		return u, found && err == nil
+		if err != nil || !found {
+			return User{}, false
+		}
+		return u, true
 	}
 	for _, u := range s.snapshot().Users {
 		if u.Username == name {

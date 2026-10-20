@@ -17,10 +17,10 @@ func (*failedDirectoryRepository) Directory(state.DirectoryQuery) (state.Directo
 	return state.DirectoryPage{}, errors.New("database unavailable")
 }
 func (*failedDirectoryRepository) UserByUsername(string) (User, bool, error) {
-	return User{}, false, errors.New("database unavailable")
+	return User{ID: "partial-admin", Username: "admin", Role: "admin", PasswordHash: "partial-hash"}, true, errors.New("database unavailable")
 }
 func (*failedDirectoryRepository) UserByIdentity(state.Identity) (User, bool, error) {
-	return User{}, false, errors.New("database unavailable")
+	return User{ID: "partial-admin", Username: "admin", Role: "admin", PasswordHash: "partial-hash"}, true, errors.New("database unavailable")
 }
 func TestDirectoryAndLoginFailureNoSnapshotFallback(t *testing.T) {
 	repo := &failedDirectoryRepository{}
@@ -29,7 +29,7 @@ func TestDirectoryAndLoginFailureNoSnapshotFallback(t *testing.T) {
 	if _, ok := s.directory(w, httptest.NewRequest("GET", "/api/users?limit=10", nil), "users", state.DirectoryFilter{Global: true}); ok || w.Code != 503 || strings.Contains(w.Body.String(), "database unavailable") {
 		t.Fatal("read failure not isolated", w.Code)
 	}
-	if _, found := s.store.userByUsername("admin"); found {
+	if u, found := s.store.userByUsername("admin"); found || u.ID != "" || u.PasswordHash != "" {
 		t.Fatal("failed username read accepted")
 	}
 	if users := s.store.identityUsers("issuer", "subject"); len(users) != 0 {
