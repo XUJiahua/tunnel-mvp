@@ -4,16 +4,9 @@
 
 ## 1. 从 v0.1.1 升级
 
-1. 安排维护窗口，告知用户隧道和应用长连接会中断。
-2. 停止 Server，备份整个 `dataDir`（默认 `data/`），包含选用的 `state.json` / `state.db`、`audit.jsonl` 及轮转文件。配置文件另行备份；环境变量中的凭据继续由原密钥管理方式保管。
-3. 获取包含本次变更的提交并运行 `make build`，替换二进制。未打版本标签时，GitHub Releases 中旧产物不含新功能。
-4. 运行 `./tunnel server -c server.json --check-config`，确认域名、数据目录和探测间隔，启动 Server。运行时无需 Node.js。
-5. 逐站点验证在线状态、应用手动探测、登录和 WebSocket/SSE。
-6. 为需要自动加载 ACL 的 Agent 更新二进制并加上 `--watch-config`。未更新的 Agent 仍能使用原有隧道协议。
+按 [v0.1.1 专项升级与恢复](upgrade-v0.1.1.md) 操作。v0.1.1 只有 JSON，且没有 storage 命令或目录锁；必须先停机并备份整个旧目录及配置。当前版本授权 schema/backup v10、monitor schema v3；已有 SQLite 的升级另见 [存储手册](storage-operations.md)。
 
-旧 `state.json` 会直接读取；新增 `serviceIDs` 缺省为空，不会改变整站授权。Server 重启后所有人重新登录。回滚时停止 Server，恢复升级前数据备份和二进制；不要用旧版本覆盖写入已包含新授权的数据文件。配置新增字段应与旧二进制同时回滚，旧版本严格拒绝未知字段。
-
-当前仍为**单进程、单数据目录**。新版本用文件锁阻止两个 Server 或离线维护命令同时打开同一目录；旧版程序不认识此锁。不要对运行中的状态文件手工修改。管理员密码遗失时使用 [离线恢复命令](session-operations.md)，必须先停止 Server；多管理员操作见 [管理员手册](administrator-operations.md)。
+Server 重启清空设备会话和票据，旧 Agent 可通过兼容站点令牌重连。先验收原入口，再逐台迁移独立 Agent 凭据。回退必须恢复旧二进制、旧配置和升级前完整目录，不能把新格式数据交给旧程序。当前仍为单控制面，不支持共享目录。
 
 ## 2. 新建站点与应用
 
@@ -46,7 +39,7 @@ Agent 在容器里时，`127.0.0.1` 是容器本身。内网 HTTPS 的 CA 必须
 
 例如只让成员访问 Grafana：取消 Grafana 所在站点的整站授权，再勾选 Grafana 应用。仅取消应用选项、却保留整站授权，不会收回权限。
 
-保存后，失去授权的 WebSocket、SSE 和代理请求会被关闭，其他获授权应用不受影响。成员下次刷新控制台或最多 10 秒后看到更新后的资源列表。用户无法直接输入任意内网地址，应用仍由管理员登记。
+保存后，失去授权的 WebSocket、SSE 和代理请求会被关闭，其他获授权应用不受影响。成员下次刷新控制台或最多 10 秒后看到更新后的资源列表。普通访问成员无法直接提交任意内网地址；应用由全局管理员或持有应用管理能力的组织成员登记。
 
 删除成员会使该成员全部控制台和应用会话失效，并关闭现有连接。轮换站点令牌会断开整个站点，请同步更新 Agent 的 `TUNNEL_AGENT_TOKEN` 并重启。
 
@@ -76,7 +69,7 @@ Agent 在容器里时，`127.0.0.1` 是容器本身。内网 HTTPS 的 CA 必须
 
 无效文件保持旧配置，日志出现 `agent config reload rejected`。不要据此误认为新的收紧策略已经生效。`siteID/serverURL` 变更会拒绝自动加载，需重启进程；令牌和日志配置也需重启。
 
-CLI `--allow` 和 `TUNNEL_ALLOW` 的优先级高于文件。使用它们时，修改文件里的 `allow` 不会覆盖这些值。自动重载只加载本地策略，控制面不下发新白名单。
+CLI `--allow` 和 `TUNNEL_ALLOW` 的优先级高于文件。使用它们时，修改文件里的 `allow` 不会覆盖这些值。本地重载只改变本地策略；另可显式启用 [远程策略](agent-policy-operations.md)，实际权限取本地 ACL 与远程规则交集，控制面不能放宽本地上限。
 
 ## 7. 自动探测和诊断
 
@@ -96,7 +89,7 @@ Server 配置示例：
 
 `probeIntervalSeconds` 可用 `--probe-interval` 或 `TUNNEL_PROBE_INTERVAL_SECONDS` 覆盖，0 禁用，否则为 10–86400。启动后第一批在一个间隔后执行，手动“检测连接”可立即得到结果。最多 4 个探测同时运行，大批慢目标可能使实际刷新周期变长。
 
-控制台会加载最近探测结果，悬停结果可查看时间。401/403/405/5xx 表示 HTTP **可达**，但不是 2xx/3xx 的状态码健康结果。HTTP 探测不验证业务流程；可达与应用正常工作应分别判断。
+控制台会加载最近探测结果，悬停结果可查看时间。401/403/405/5xx 表示 HTTP **可达**。业务健康按应用配置的方法、路径和预期状态判断，默认接受 200–399；可配置精确预期状态。HTTP 探测不验证业务流程；可达与应用正常工作应分别判断。
 
 失败时打开“诊断详情”，查看阶段、IP、ACL 和请求 ID。也可在内网机器独立执行：
 
@@ -118,14 +111,17 @@ Server 配置示例：
 | 指标 | 用途 |
 | --- | --- |
 | `tunnel_site_online` | Agent 控制隧道在线，0/1 |
-| `tunnel_service_reachable` | 最近一次 HEAD 是否收到 HTTP 响应 |
-| `tunnel_service_healthy` | 最近一次 HEAD 是否返回 200–399 |
+| `tunnel_service_reachable` | 最近一次配置的探测是否收到 HTTP 响应 |
+| `tunnel_service_healthy` | 最近一次探测是否匹配配置的预期状态 |
 | `tunnel_service_probe_timestamp_seconds` | 探测新鲜度；没有快照时不输出应用样本 |
 | `tunnel_service_probe_duration_seconds` | 最近一次探测耗时 |
 | `tunnel_proxy_requests_total` | 已鉴权代理请求累计值 |
 | `tunnel_proxy_errors_total` | 上游传输错误累计值，不含正常收到的 HTTP 5xx |
 | `tunnel_active_requests` | 活跃代理请求和手动探测 |
 | `tunnel_probes_total` | 已完成手动/自动探测累计值 |
+| `tunnel_site_agents` | 在线 Agent 实例数；冗余站点低于 2 应视作降级 |
+| `tunnel_state_query_errors_total` | 资源/用户持久化投影失败累计值 |
+| `tunnel_audit_index_errors_total` / `tunnel_monitor_storage_errors_total` | 审计索引/健康历史写入或重建失败 |
 
 告警样例关注离线、不可达、探测过期和代理错误比率。401 为正常认证行为的应用，不宜直接针对 `healthy=0` 报警。关闭自动探测时应同时调整过期告警。程序只提供指标和状态变化记录，不直接发送邮件或消息。
 
@@ -133,7 +129,7 @@ Server 配置示例：
 
 管理员打开“审计日志”，可按事件类型、站点 ID 精确过滤。常用事件：`login`、`logout`、`password_changed`、`password_reset`、`user_grants_updated`、`site_updated`、`service_updated`、`health_changed`、`proxy_error`。
 
-界面显示当前文件尾部 2 MiB 内最近 100 条匹配记录，不是完整历史检索。API 的 `limit` 最大 500。完整历史请采集 `audit.jsonl` 及 `.1` 至 `.N`。
+界面查询全部保留审计文件，每页最多 100 条/约 2 MiB；API 的 `limit` 最大 500。支持组合过滤、组织隔离和游标分页，轮转/重启后旧游标失效需重新查询。详见 [审计手册](audit-operations.md)。长期保留须在轮转删除前归档。
 
 默认活跃文件约 20 MiB、5 个备份，可通过 `auditMaxMB` / `auditBackups`（或 `--audit-max-mb` / `--audit-backups`、对应环境变量）调整。新文件权限 0600。轮转错误会输出 `audit rotation failed`，检查目录权限和磁盘空间。
 

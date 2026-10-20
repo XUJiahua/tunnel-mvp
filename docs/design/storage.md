@@ -1,10 +1,10 @@
 # 状态存储、SQLite 与迁移设计
 
-本批在 `feat/operations-and-access` 上继续开发，作为依赖 PR #1 的 stacked PR。仅包含存储与离线维护增量，不合并前一批，也不修改 `main`。
+本文记录截至 #22 的存储行为。第二批首次引入 Repository/SQLite，后续版本增加组织、Agent、增量写入和定向查询。历史批次说明不代表当前 schema 版本。
 
 ## 1. 决策
 
-默认继续使用 JSON，新增 `storage: sqlite` 选项。SQLite 用于单机部署中的事务、约束与版本管理，控制面仍是一个进程。会话、短期票据、探测结果和 Agent 隧道归属仍在内存中，因此不声称支持 HA。
+默认继续使用 JSON，新增 `storage: sqlite` 选项。SQLite 用于单机部署中的事务、约束与版本管理，控制面仍是一个进程。会话、短期票据和 Agent 隧道归属仍在内存中，健康历史另存 monitor.db，因此不声称支持 HA。
 
 驱动固定为 `modernc.org/sqlite v1.60.1`，保持 `CGO_ENABLED=0`；进程锁固定使用 `github.com/gofrs/flock v0.12.1`。驱动和锁的跨平台编译加入现有 Linux/macOS/Windows × amd64/arm64 六平台 CI。
 
@@ -26,7 +26,7 @@ type Repository interface {
 
 读模型保存在内存中，Snapshot 返回深拷贝。Update 在互斥锁内复制当前状态、执行回调、验证完整状态、提交持久化，最后替换缓存。回调拒绝、校验失败或持久化失败时，缓存保持原值。提交后再次复制，避免回调保留的切片引用修改已提交状态。
 
-本版 SQLite 每次在一个事务中重写配置聚合，复杂度仍与配置总量相关；它补齐事务和结构约束，不是大规模增量 SQL 查询优化。后续可在 Repository 后调整增量写入策略。
+SQLite 当前仅写变化实体和授权关系，提交成功后发布缓存；Update 的完整复制/语义校验成本仍与总量相关。资源点查和当前用户鉴权使用可选定向查询，SQL 失败不回退旧快照；管理列表等仍有快照/扫描成本。详见 [增量写入](incremental-sqlite.md)、[资源查询](resource-queries.md)和[用户投影](user-queries.md)。
 
 ## 3. 进程与文件生命周期
 
@@ -36,9 +36,9 @@ Server 和所有读取活动数据目录的离线命令，都持有该目录的�
 
 打开已有数据失败时绝不重新初始化管理员。启动在审计文件或其他后续步骤失败时也会关闭存储并释放锁。关闭存储是幂等操作，先关闭数据库再释放目录锁。
 
-## 4. SQLite schema v6
+## 4. SQLite schema v10
 
-数据库为 `state.db`，设置固定 `application_id = 0x54554e4c`（TUNL）与 `user_version = 3`。打开已有数据库时验证标识、版本、quick_check、外键与业务模型。未知版本、错误文件、缺表或损坏数据均拒绝启动，不自动降级或覆盖。
+数据库为 `state.db`，设置固定 `application_id = 0x54554e4c`（TUNL）与 `user_version = 10`。打开已有数据库时验证标识、版本、quick_check、外键与业务模型。未知版本、错误文件、缺表或损坏数据均拒绝启动，不自动降级或覆盖。
 
 | 表 | 内容与关键约束 |
 | --- | --- |
@@ -47,10 +47,13 @@ Server 和所有读取活动数据目录的离线命令，都持有该目录的�
 | `services` | ID 主键、所属站点外键、名称和 HTTP/HTTPS 源地址 |
 | `user_sites` | 用户/站点外键，授权组合唯一 |
 | `user_services` | 用户/应用外键，授权组合唯一 |
+| `groups` / `invites` | 组与邀请 JSON payload、ID 和 position；业务层校验引用 |
+| `organizations` / `roles` | 组织归属与角色能力 payload |
+| `agents` | 独立 Agent、凭据状态、远程策略 payload |
 
 主表和授权表记录 position，保证迁移/恢复后保持列表顺序。业务层另外检查 ID、名称、角色、非空密码的 bcrypt 格式、身份格式/唯一性、令牌散列、至少一个启用的本地密码管理员、目标 URL 和所有引用；空授权列表标准化为空数组，重复授权去重。
 
-数据库使用单连接、外键开启、5 秒 busy timeout、FULL synchronous 和 DELETE journal。配置读使用内存快照，不需要 WAL 读写并发。事务失败会完整回滚，包括此前已删除/重写的记录。不要用外部程序改变 journal 模式或直接编辑表。
+数据库使用单连接、外键开启、5 秒 busy timeout、FULL synchronous 和 DELETE journal。快照和定向 SQL 查询均与当前进程的 Update/Close 排序，不支持外部写入或多进程共享。事务失败会完整回滚，包括此前已删除/重写的记录。不要用外部程序改变 journal 模式或直接编辑表。
 
 第三批新增受测试的 v1 → v2 升级：独占目录锁内以单事务添加字段和身份索引、加载业务模型并校验，全部成功后提交版本；失败回滚。Server、inspect/export 的打开动作均可能升级，升级前先用旧程序备份停机目录。未知/零版本不自动初始化。详见 [OIDC 设计](oidc.md)。
 
@@ -78,7 +81,7 @@ JSON 正常更新沿用临时文件写入/fsync/原子替换。新建目录默�
 
 ## 7. 可移植备份
 
-导出格式固定为：`format=tunnel-state`、`version=6`（继续读取 v1–v5）、UTC 导出时间、规范 JSON 状态的 SHA-256，以及完整 State。无论来源后端为何，都可恢复成 JSON 或 SQLite。
+导出格式固定为：`format=tunnel-state`、`version=10`（继续读取 v1–v9）、UTC 导出时间、规范 JSON 状态的 SHA-256，以及完整 State。无论来源后端为何，都可恢复成 JSON 或 SQLite。
 
 校验和用于发现意外修改，不是签名或来源认证。备份含密码/Agent 令牌散列和内部服务地址，不加密；操作者应按敏感数据保存。审计日志、配置文件、环境变量中的明文凭据、TLS/CA 和内存会话不包含在此文件中。
 
@@ -99,3 +102,5 @@ JSON 正常更新沿用临时文件写入/fsync/原子替换。新建目录默�
 资源批次 schema v5 增加 custom_domain，允许经过验证的路径目标；v1–v4 事务升级，见 [资源设计](resources-targets.md)。
 
 监控批次 schema v6 新增应用健康字段；监控历史 monitor.db 和审计不在授权快照内，使用配对运维归档，见 [监控设计](monitoring-history.md)。
+
+当前版本演进：v7 Agent 实例、v8 远程策略、v9 会话连接模式、v10 有界角色委派；#16 增量写入、#21/#22 查询改造未提升 schema/backup v10。monitor schema v3 独立维护。

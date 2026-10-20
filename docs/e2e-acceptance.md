@@ -1,6 +1,8 @@
 # 端到端验收矩阵
 
-记录日期：2026-10-19。代码基线为 stacked PR #19 `feat/application-oidc-example`，该层代码 tree 为 `47f8264ec6d5b7c7a16bb7ae22e35a9e02cf7e66`，远端 commit 为 `9b3d7be9909efa83285969718fde3e0707f92920`。所有父批次在同一完整回归中执行；PR #20 补设计、验收记录及发布内容检查，不修改应用行为。不得把未执行的外部场景标为通过。
+记录更新：2026-10-20。最新应用行为基线为 stacked PR #22 `70023e9edba70d751f04682aeca02f85c18ba99d`。#19 历史基线为 commit `9b3d7be9909efa83285969718fde3e0707f92920`、tree `47f8264ec6d5b7c7a16bb7ae22e35a9e02cf7e66`；#20 为 HA 设计/验收文档，#21/#22 改造资源及用户查询。本批收敛文档并增加真实旧版升级门禁，不修改应用行为。
+
+本文件区分历史通过、最新 CI 和本次本地结果。不能把历史测试、交叉编译或设计提案记成新环境/HA 已验收。
 
 ## 运行环境与命令
 
@@ -52,6 +54,22 @@ pnpm --dir web run test:e2e
 
 ## 未覆盖与继续条件
 
-Linux 上执行的协议/进程测试和六平台编译没有验证 macOS/Windows 服务管理、真实 AD/NTLM、更多 IdP 或生产负载。资源自定义域名测试验证代理路由，不代表外部 DNS/TLS 自动管理已实现。控制面 HA 仍未实现，现有测试没有多节点数据库/集群故障保证。
+Linux 上执行的协议/进程测试和六平台编译没有验证 macOS/Windows 服务管理、真实 AD/NTLM、更多 IdP 或生产负载。资源自定义域名测试包含运行中更换域名、旧入口拒绝和新入口登录，但只验证代理路由，不代表外部 DNS/TLS 自动管理已实现。控制面 HA 仍未实现，现有测试没有多节点数据库/集群故障保证。
 
-待实现的多组织成员、组织级 IdP、设备风险识别和增量 SQL 查询继续列于路线图。HA 代码分解见 [设计](design/control-plane-ha.md)，隔离环境与故障验收要求见 [操作手册](ha-operations.md)。
+待实现的多组织成员、组织级 IdP、设备风险识别和剩余管理列表/成员索引查询继续列于路线图。HA 代码分解见 [设计](design/control-plane-ha.md)，隔离环境与故障验收要求见 [操作手册](ha-operations.md)。
+
+## #21/#22 最新提交证据
+
+- #21：资源 ID/域名定向 SQL、提交排序、查询故障拒绝、索引计划和 durable 回滚；浏览器增加运行中域名切换。
+- #22：用户/直接授权/角色/组同一版本投影、返回值隔离、部分查询故障拒绝和错误计数；管理列表和 membership JSON 扫描仍存在。
+- #22 完整 make test、双后端各 15 项 Playwright（含原生 Keycloak/OTP/上游 SSO）与六平台快照已记录通过。
+- 最新 commit 的 [PR CI](https://github.com/XUJiahua/tunnel-mvp/actions/runs/39308731234) 与 [push CI](https://github.com/XUJiahua/tunnel-mvp/actions/runs/39308663203) 均 completed/success；PR CI 的 verify、六个 cross-build、JSON/SQLite 两个 keycloak-e2e 共九项通过。普通 verify 不设置 KEYCLOAK_HOME，真实 Keycloak 由独立任务补验，不能把普通套件的 skip 算作通过。
+- PR #22 描述另记录最终干净提交上 5464 次混合负载零错误；仍是回环明文短测，不替代生产容量。
+
+## 本批新增：真实 v0.1.1 升级门禁
+
+使用官方 v0.1.1 Linux amd64 发布包，archive SHA-256 固定为 `47de51ee874c2dd0f7f9782d1eb02705ca283d680f07ef669f92188576c0d69b`。`scripts/verify-upgrade.sh` 校验下载内容后调用 Python 演练；旧版号及 commit 也校验，不以手写 JSON 夹具冒充旧版升级。
+
+本次本地应用二进制来自 #22 行为基线，Go 1.27.2 / Linux amd64，旧 Server/旧 Agent/新 Server/上游均为真实进程。JSON、SQLite、双向跨后端配对恢复、原 ID/散列/授权、未授权拒绝、旧会话失效、活动目录锁拒绝、升级后真实写入及原目录回退通过；原始无秘密报告见 [升级记录](acceptance/2026-10-20-upgrade-v011.json)。报告中的 dev/none 是 make build 默认版本元数据，并非正式发布包。候选阶段必须对最终整合提交重新构建、注入版本并重跑。
+
+新演练已进入普通 CI 与发布工作流，输出 JSON 报告作为 Actions artifact；六平台包必须包含升级手册、交付基线和复现脚本。本次本地 Chromium 启动遇到 socket Operation not permitted，浏览器回归交由本批远端 CI；不得将本地受限运行记为通过。

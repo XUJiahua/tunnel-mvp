@@ -41,6 +41,8 @@ archives:
       - CHANGELOG.md
       - examples/**
       - docs/**
+      - scripts/verify-upgrade.py
+      - scripts/verify-upgrade.sh
 
 checksum:
   name_template: checksums.txt

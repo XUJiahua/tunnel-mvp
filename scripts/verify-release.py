@@ -38,6 +38,8 @@ def verify(directory: Path, version: str | None = None) -> None:
 
     required = {'README.md', 'CHANGELOG.md', 'examples/server.json', 'examples/agent.json', 'docs/operations.md', 'docs/design/storage.md', 'docs/storage-operations.md', 'docs/design/groups-invitations.md', 'docs/groups-operations.md', 'docs/design/administrators.md', 'docs/administrator-operations.md', 'docs/design/organizations-roles.md', 'docs/organization-operations.md', 'docs/design/resources-targets.md', 'docs/resource-operations.md', 'docs/design/monitoring-history.md', 'docs/monitoring-operations.md', 'docs/design/audit-index.md', 'docs/audit-operations.md', 'docs/third-party-dependencies.md', 'docs/licenses/remotedialer-LICENSE', 'docs/design/session-lifecycle.md', 'docs/session-operations.md', 'docs/design/oidc.md', 'docs/oidc-operations.md', 'examples/oidc/server.production.json', 'examples/oidc/server.development.json', 'examples/oidc/keycloak.compose.yaml'}
     required.update({
+        'docs/release-readiness.md', 'docs/upgrade-v0.1.1.md',
+        'scripts/verify-upgrade.py', 'scripts/verify-upgrade.sh',
         'docs/design/agent-instances.md', 'docs/agent-operations.md',
         'docs/design/agent-remote-policy.md', 'docs/agent-policy-operations.md',
         'docs/design/agent-updates.md', 'docs/agent-update-operations.md',

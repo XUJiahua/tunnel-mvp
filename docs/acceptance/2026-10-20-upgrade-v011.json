@@ -1,0 +1,25 @@
+{
+  "upgrade": [
+    {
+      "backend": "json",
+      "crossBackendRestore": "sqlite",
+      "result": "pass"
+    },
+    {
+      "backend": "sqlite",
+      "crossBackendRestore": "json",
+      "result": "pass"
+    }
+  ],
+  "legacyAgentReconnect": "pass",
+  "rollback": "pass",
+  "sessionInvalidation": "pass",
+  "credentialHashesAndIDs": "pass",
+  "ungrantedMemberDenied": "pass",
+  "offlineLock": "pass",
+  "oldVersion": "tunnel 0.1.1 (commit: 020224911d5fdff6e007ca6811371d55939e0076, built: 2026-10-19T13:13:20Z)",
+  "newVersion": "tunnel dev (commit: none, built: unknown)",
+  "oldBinarySHA256": "c5bdb0e1bf9e0b791640f568a701b1d0bd34901dc0ae0b515a9824aa0896416d",
+  "newBinarySHA256": "a06f4e8cf5bf7d0d8b7560dc640f7e7bad2368f38a89957def89f6f29004865e",
+  "scope": "local HTTP, real v0.1.1 server/Agent; no external DNS/TLS/IdP or target OS validation"
+}

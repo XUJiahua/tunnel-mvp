@@ -4,6 +4,8 @@
 
 **Go 后端 + Next.js 静态前端，通过 `go:embed` 打进同一个二进制。** 运行时无需 Node.js。内网站点运行同一二进制的 `agent` 模式，只需能够主动访问公网控制面。
 
+> 本文描述当前开发分支能力。#1–#22 的新增功能尚未进入已发布的 v0.1.1；下载旧 Release 不会获得这些功能。发布状态以 [交付基线](docs/release-readiness.md) 为准。
+
 ![控制台示例](docs/console.png)
 
 ## 文档
@@ -14,7 +16,7 @@
 - [OIDC 设计](docs/design/oidc.md)与[统一登录/禁用手册](docs/oidc-operations.md)：显式身份绑定、Keycloak 接入和即时撤销边界。
 - [会话生命周期设计](docs/design/session-lifecycle.md)与[设备/退出/恢复手册](docs/session-operations.md)：逐设备撤销、真实 Keycloak/OTP 验证和离线管理员恢复。
 - [用户组/邀请设计](docs/design/groups-invitations.md)与[操作手册](docs/groups-operations.md)：共享授权、一次性链接及设密。
-- [实施路线图](docs/roadmap.md)：已交付能力与后续数据库、SSO、HA 等工作。
+- [实施路线图](docs/roadmap.md)：已交付能力与已完成范围、剩余查询、HA 与目标环境验收。
 
 - [多管理员设计](docs/design/administrators.md)与[操作手册](docs/administrator-operations.md)：独立管理员、当前密码验证与最后恢复账号保护。
 
@@ -28,17 +30,19 @@
 
 - [应用 OIDC 示例](examples/oidc-app/README.md)、[设计](docs/design/application-oidc.md)与[接入手册](docs/application-oidc-operations.md)：独立应用 client、路径挂载、真实 Keycloak SSO 和退出边界。
 
-- [端到端验收矩阵](docs/e2e-acceptance.md)：前十九批回归覆盖与未验收范围；[控制面 HA 设计提案](docs/design/control-plane-ha.md)及[故障验收手册](docs/ha-operations.md)。
+- [端到端验收矩阵](docs/e2e-acceptance.md)：截至 #22 的回归覆盖、CI 证据与未验收范围；[控制面 HA 设计提案](docs/design/control-plane-ha.md)及[故障验收手册](docs/ha-operations.md)。
 
 - [资源定向查询设计](docs/design/resource-queries.md)与[索引操作](docs/resource-query-operations.md)：SQLite ID/域名点查、提交一致性和局部基准。
 
 - [当前用户鉴权投影](docs/design/user-queries.md)与[查询故障手册](docs/user-query-operations.md)：直接/角色/组授权的一致读取和失败指标。
 
+- [交付基线与后续阶段](docs/release-readiness.md)、[v0.1.1 升级与恢复](docs/upgrade-v0.1.1.md)。
+
 ## 已实现
 
-- 控制台登录、管理员 / 成员两种角色、按整站或单独应用分配访问权限；支持直接编辑成员授权、自助改密和管理员重置成员密码。
+- 控制台登录、全局管理员、组织归属、自定义组织角色及有界委派；按整站或单独应用分配访问权限；支持直接编辑成员授权、自助改密和管理员重置成员密码。
 - 可选控制台 OIDC 登录（Authorization Code + PKCE），显式 issuer/sub 绑定、OIDC 专用成员、禁用/启用及即时会话撤销；保留本地管理员恢复入口。
-- 站点创建、在线状态、一次性展示 Agent 令牌、令牌轮换、删除与断连。
+- 站点创建、在线状态、每站点最多 16 个独立 Agent、独立凭据及故障切换；远程策略收紧、签名升级和自动回滚。
 - 直接编辑站点名称、应用名称与目标地址，保留资源 ID。
 - 每站点多个 HTTP / HTTPS 应用；添加目标不需要重启 Agent，只要目标已在 Agent 白名单内。
 - 每应用独立子域名、30 秒一次性登录票据、1 小时访问会话。
@@ -53,7 +57,8 @@
 - Agent `--watch-config` 校验后自动重载本地 ACL，通过重连撤销旧连接。
 - 按应用隔离的 HTTP 连接池、可配置业务健康检查、持久化历史与图表、状态快照、Prometheus 指标与告警配置示例。
 - JSON（默认）/ SQLite 状态存储、数据目录进程锁、离线迁移和带校验和的跨后端备份恢复。
-- JSONL 审计日志、大小轮转及控制台查询；密码 bcrypt、Agent 令牌 SHA-256 存储。
+- 用户组授权并集、一次性成员邀请、多管理员及最后恢复管理员保护。
+- JSONL 审计日志、大小轮转、全部保留文件索引及分页；密码 bcrypt、Agent 令牌 SHA-256 存储。
 - Docker 多阶段构建、Compose、GitHub Actions 构建与测试。
 
 ## 架构
@@ -75,7 +80,7 @@ flowchart TB
 
 ## 下载二进制
 
-从 [GitHub Releases](https://github.com/XUJiahua/tunnel-mvp/releases) 下载对应平台的压缩包，无需安装 Go 或 Node.js。
+从 [GitHub Releases](https://github.com/XUJiahua/tunnel-mvp/releases) 下载对应平台的压缩包，无需安装 Go 或 Node.js。当前已发布 v0.1.1 只包含初始 MVP、CLI/诊断及构建修复；本页后续功能需构建对应开发提交。
 
 | 系统 | 架构 | v0.1.1 文件 |
 | --- | --- | --- |
@@ -221,7 +226,7 @@ export TUNNEL_AGENT_TOKEN
 
 一条规则中的 CIDR、端口和可选主机名必须同时匹配，多条规则之间为“或”。`host` 是精确主机名，不支持通配符。主机名由 Agent 在内网解析，实际连接的是通过 CIDR 检查的 IP；不允许使用域名绕过网段限制。始终拒绝未指定地址、多播、链路本地地址（包括云元数据常用地址）；不支持 UDP。
 
-每个站点一个 Agent 即可访问其网络范围内的多个目标。MVP 同一站点只接受一个活跃 Agent，重复连接返回 409。断开后使用带抖动的 1–30 秒退避自动重连。使用 `--watch-config` 时，每 2 秒检查本地配置；合法 ACL 变更会断开旧隧道并重连，无效配置保持旧策略。未启用时需重启 Agent。身份、令牌或日志设置变更仍需重启。
+每个站点一个 Agent 即可访问其网络范围内的多个目标。同站点可登记最多 16 个独立 Agent，分别使用 instanceID/token；旧站点令牌兼容入口只接受一个活跃连接，重复兼容连接返回 409。新 TCP 通道在在线实例间分配，故障前已发送的请求不自动重放。详见 [Agent 手册](docs/agent-operations.md)。断开后使用带抖动的 1–30 秒退避自动重连。使用 `--watch-config` 时，每 2 秒检查本地配置；合法 ACL 变更会断开旧隧道并重连，无效配置保持旧策略。未启用时需重启 Agent。身份、令牌或日志设置变更仍需重启。
 
 令牌由环境变量传入，不要写进命令行参数、版本库或镜像。令牌轮换会断开旧连接，旧令牌将无法重连。
 
@@ -272,7 +277,7 @@ Compose 默认只将 Go 的 8080 绑定到公网机器的回环地址，由宿�
 - 清除上游 Cookie 的 Domain，保留 Path / HttpOnly / SameSite；HTTPS 公网访问强制添加 Secure。
 - 保留上游 CSP 和其他应用安全响应头，不通过 iframe 嵌入应用。
 - `tunnel_console`、`tunnel_access` 为保留 Cookie 名；`/_tunnel/entry` 为保留路径。
-- 默认每 60 秒自动 HEAD 探测（`--probe-interval 0` 可禁用），最多 4 个并发任务。HTTP HEAD 探测成功代表收到了 HTTP 响应（包括 401 / 403 / 405 / 5xx），不代表业务健康；探测结果另有 `healthy` 字段表示 HEAD 是否返回 200–399。
+- 默认每 60 秒自动探测（HEAD/GET，`--probe-interval 0` 可禁用），最多 4 个并发任务。HTTP 可达代表收到 HTTP 响应（包括 401 / 403 / 405 / 5xx），不代表业务健康；`healthy` 按已配置方法、路径和预期状态判断，默认接受 200–399。
 
 ## 数据、审计与边界
 
@@ -281,21 +286,22 @@ Compose 默认只将 Go 的 8080 绑定到公网机器的回环地址，由宿�
 | 文件 | 内容 |
 | --- | --- |
 | `state.json` / `state.db` | JSON / SQLite 后端的用户、bcrypt 密码散列、站点、Agent 令牌散列、应用与权限 |
-| `audit.jsonl` | 登录、站点 / 应用 / 用户操作、Agent 连接、应用访问与探测事件 |
+| `audit.jsonl` 及轮转文件 | 登录、资源 / 权限操作、Agent 连接、应用访问与探测事件 |
+| `monitor.db` | 健康历史与可重建的审计索引；与授权状态分开配对备份 |
 
-默认 JSON 使用临时文件落盘后原子替换；可显式选择 SQLite，以事务与外键保存配置。新文件权限 0600、默认新建目录 0700。目录锁阻止两个新版本进程并发使用同一数据目录。审计记录用户和资源 ID，不保存令牌、Cookie、请求体或查询参数。备份整个数据目录；审计默认每 20 MiB 轮转、保留 5 份，可配置；控制台提供当前文件尾部查询。完整历史可交给外部日志系统。
+默认 JSON 使用临时文件落盘后原子替换；可显式选择 SQLite，以事务与外键保存配置。新文件权限 0600、默认新建目录 0700。目录锁阻止两个新版本进程并发使用同一数据目录。审计记录用户和资源 ID，不保存令牌、Cookie、请求体或查询参数。备份整个数据目录；审计默认每 20 MiB 轮转、保留 5 份，可配置；控制台索引全部保留审计文件并提供过滤与分页。已被轮转删除的历史需使用事先归档或外部日志系统查询。
 
 切换后端前先停止 Server，执行 `tunnel storage migrate --data-dir data`，再设置 `storage: sqlite`。`storage export/validate/restore` 支持两后端之间的可移植备份。迁移保留原 JSON，拒绝覆盖已有 SQLite；细节见存储手册。
 
-**MVP 明确范围：**
+**当前版本边界：**
 
 - 单控制面进程、单数据目录；没有多实例共享存储、HA 或跨网关隧道路由。新版本会拒绝第二个进程打开同一数据目录；不要使用多主机共享文件系统。SQLite 不提供控制面 HA。
 - 用户 / 访问会话与短期票据在内存中，重启 Server 后需重新登录；用户、站点、服务配置保留。
 - 授权在每个 HTTP 请求及 WebSocket Upgrade 时检查；退出、密码变更、授权收回或到期主动关闭受影响的请求。删除站点 / 轮换令牌会关闭整个站点隧道。
-- 已支持成员授权编辑、自助改密和管理员重置成员密码；支持显式 OIDC 绑定与账号禁用；已支持离线管理员恢复、OIDC back-channel/RP 退出和可选 acr/amr 策略；支持用户组与一次性成员邀请；尚无多租户及自定义管理角色。
-- 目标登记由管理员执行；成员不能提交任意目标地址。通过新增应用可动态访问 Agent 白名单内的新目标。
+- 已支持成员授权编辑、自助改密和管理员重置成员密码；支持显式 OIDC 绑定与账号禁用；已支持离线管理员恢复、OIDC back-channel/RP 退出和可选 acr/amr 策略；支持用户组与一次性成员邀请；已支持组织隔离、自定义管理角色和有界委派；单成员仍只属于一个组织，尚无组织级 IdP。
+- 目标登记由全局管理员或具有组织应用管理能力的成员执行；普通访问成员不能提交任意目标地址。通过新增应用可动态访问 Agent 白名单内的新目标。
 - 不支持 SSH / RDP / 数据库的浏览器协议网关，也不支持 UDP、P2P 或 QUIC。
-- 连接池按应用隔离并在 Agent 断线/目标修改时清理；已验证真实隧道连接复用。尚未进行生产容量压测或生产安全审计；连接绑定身份的认证协议需要额外适配。
+- 连接池按应用隔离并在 Agent 断线/目标修改时清理；已验证真实隧道连接复用。尚未进行生产容量压测或生产安全审计；可选 session 连接模式已验证身份隔离；真实 AD/NTLM 产品仍需单独验收。
 - 本地密码登录为 60 次 / 分钟全局限速，OIDC pending flow 上限 256 条/5 分钟；这些限制用于 MVP；面向公网可在反向代理中另加按 IP 限速。
 
 ## 开发与验证
@@ -332,7 +338,7 @@ examples/             本地 / 公网配置、Caddy 示例
 
 `.goreleaser.yaml` 固定六个平台矩阵，`CGO_ENABLED=0` 交叉编译。发布前钩子先执行 `make frontend`，确保每个平台都嵌入同一份 Next.js 静态资源。GoReleaser 注入版本、提交 SHA 与构建时间；Linux / macOS 输出 tar.gz，Windows 输出 zip，并生成 SHA-256 校验文件。
 
-正常发布：提交代码后推送版本标签，CI 检查通过后自动创建 GitHub Release 并上传产物。
+正常发布：先完成 [交付检查](docs/release-readiness.md)，再对验收过的准确提交推送版本标签，CI 检查通过后创建 GitHub Release 并上传产物。以下命令是操作示例，不代表该版本已发布。
 
 ```bash
 git tag -a v0.2.0 -m "Release v0.2.0"
@@ -345,7 +351,7 @@ git push origin v0.2.0
 
 CI 会先执行构建、Go race / vet、TypeScript 与真实 Agent 的 Playwright 测试，再由 GoReleaser 上传到草稿 Release。CI 校验六个平台矩阵、SHA-256、压缩包完整性与必要文件，再下载附件重新校验，全部通过后公开发布。仅发布工作流具有 `contents: write` 权限；普通构建保持只读，不需要额外 PAT。
 
-本地验证需要安装 GoReleaser **v2.18.3**、Python **3.11+** 和前述 Go / Node.js：
+本地验证需要安装 GoReleaser **v2.17.1**、Python **3.11+** 和前述 Go / Node.js：
 
 ```bash
 make release-check

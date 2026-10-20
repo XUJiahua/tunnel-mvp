@@ -42,6 +42,6 @@
 
 ## 升级与边界
 
-本层授权 SQLite/backup v6，兼容 v1–v5 事务升级。新增 monitor.db 在所有授权后端都使用纯 Go SQLite。组织/应用授权同样限制历史读取，组织操作者不能查询别的组织图表。
+当前授权 SQLite/backup v10，兼容 v1–v9；monitor.db schema v3，独立于授权版本。新增 monitor.db 在所有授权后端都使用纯 Go SQLite。组织/应用授权同样限制历史读取，组织操作者不能查询别的组织图表。
 
 第十批在线 UI 已索引全部保留轮转文件，详见 [审计查询手册](audit-operations.md)。长期保留需要在轮转删除前归档或使用日志采集系统。
