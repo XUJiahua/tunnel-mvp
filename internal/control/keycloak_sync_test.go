@@ -19,6 +19,8 @@ import (
 func syncFixture(t *testing.T) (*fixture, *keycloakSync, User, *http.Cookie, *atomic.Int32, *atomic.Int32) {
 	t.Helper()
 	f := setup(t)
+	f.s.backgroundCancel()
+	f.s.backgroundWG.Wait()
 	var mode, tokenCalls atomic.Int32
 	idp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/token" {
@@ -77,6 +79,12 @@ func syncFixture(t *testing.T) (*fixture, *keycloakSync, User, *http.Cookie, *at
 	k := f.s.identitySync
 	k.tokenURL = idp.URL + "/token"
 	k.adminURL = idp.URL + "/admin/realms/fixture"
+	// These tests drive identity polling explicitly. Start only the auth/fence
+	// workers after fixture configuration is immutable.
+	workerCtx, workerCancel := context.WithCancel(context.Background())
+	f.s.backgroundCancel = workerCancel
+	f.s.startStorageFence(workerCtx)
+	f.s.startSharedAuth(workerCtx)
 	return f, k, u, passwordCookie, &mode, &tokenCalls
 }
 func issueSyncCookie(t *testing.T, f *fixture, u User) *http.Cookie {
@@ -84,8 +92,11 @@ func issueSyncCookie(t *testing.T, f *fixture, u User) *http.Cookie {
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest("GET", f.h.URL+"/", nil)
 	f.s.accessMu.Lock()
-	f.s.issueSession(w, u, time.Now().Add(time.Minute), sessionMetadata(req, "oidc", u.Identity.Issuer, u.Identity.Subject, "sid-fixture"))
+	issued := f.s.issueSession(w, u, time.Now().Add(time.Minute), sessionMetadata(req, "oidc", u.Identity.Issuer, u.Identity.Subject, "sid-fixture"))
 	f.s.accessMu.Unlock()
+	if !issued {
+		t.Fatal("identity session issuance failed", w.Body.String())
+	}
 	return w.Result().Cookies()[0]
 }
 func TestKeycloakSyncDisableRevokesOIDCButPreservesPassword(t *testing.T) {
@@ -126,7 +137,7 @@ func TestKeycloakSyncDisableRevokesOIDCButPreservesPassword(t *testing.T) {
 }
 func TestKeycloakSyncFailureExpiresAndFailsClosed(t *testing.T) {
 	f, k, u, local, mode, _ := syncFixture(t)
-	k.maxStale = 60 * time.Millisecond
+	k.maxStale = 500 * time.Millisecond
 	if result := k.check(context.Background(), u); result.err != nil {
 		t.Fatal(result.err)
 	}
@@ -135,7 +146,7 @@ func TestKeycloakSyncFailureExpiresAndFailsClosed(t *testing.T) {
 	if result := k.check(context.Background(), u); result.err == nil {
 		t.Fatal("unavailable API accepted")
 	}
-	time.Sleep(80 * time.Millisecond)
+	time.Sleep(600 * time.Millisecond)
 	r, _ := f.request(t, "GET", "/api/me", nil, cookie, "")
 	if r.StatusCode != 401 {
 		t.Fatal("stale status allowed new request")

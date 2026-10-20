@@ -139,10 +139,13 @@ func oidcFixture(t *testing.T) (*fixture, *testIdP, User) {
 	t.Helper()
 	p := newTestIdP(t)
 	f := setup(t)
+	f.s.backgroundCancel()
+	f.s.backgroundWG.Wait()
 	f.s.cfg.OIDC = config.OIDC{Issuer: p.server.URL, ClientID: "console", SessionMinutes: 60}
 	if err := f.s.configureOIDC(); err != nil {
 		t.Fatal(err)
 	}
+	f.s.startBackground()
 	res, b := f.request(t, "POST", "/api/users", map[string]any{"username": "external", "oidcSubject": "subject-A"}, f.cookie, "")
 	if res.StatusCode != 201 {
 		t.Fatalf("create OIDC member: %s", b)

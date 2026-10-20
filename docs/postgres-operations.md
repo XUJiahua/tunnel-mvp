@@ -1,10 +1,10 @@
-# PostgreSQL 操作手册（HA-1）
+# PostgreSQL 操作手册（HA-1/HA-2）
 
-适用于包含本阶段代码的构建；未发布的新能力不能由 v0.1.1 二进制执行。支持 PostgreSQL 15 以上，CI 验证 15 和 18。当前仍部署一个活跃 Server，数据库服务需独立维护，运行目录不能共享。会话、OIDC、隧道、审计/监控尚未组成集群。
+适用于包含本阶段代码的构建；未发布的新能力不能由 v0.1.1 二进制执行。支持 PostgreSQL 15 以上，CI 验证 15 和 18。当前仍部署一个活跃 Server，数据库服务需独立维护，运行目录不能共享。会话/OIDC 已共享存储，隧道 owner 与跨节点路由尚未实现，审计/监控仍在本地。
 
 ## 新部署
 
-预先创建独立空数据库及专用角色，角色需拥有该库内 `tunnel_state` schema、建表/约束及读写权限；不要求 superuser。不要与其他应用复用数据库。连接使用直连或保持会话的池；transaction/statement pooling 不适用于生命周期 advisory lock。每个打开的 Repository 最多两个数据库连接。
+预先创建独立空数据库及专用角色，角色需拥有该库内 `tunnel_state` schema、建表/约束及读写权限；不要求 superuser。不要与其他应用复用数据库。连接使用直连或保持会话的池；transaction/statement pooling 不适用于生命周期 advisory lock。每个 Repository 使用一个专用运行锁连接和独立请求池，最多四个数据库连接；请求取消不会释放运行锁。
 
 通过 secret manager/服务私有环境提供 `TUNNEL_POSTGRES_DSN`，不要提交到配置、命令行或日志；生产连接显式使用 `sslmode=verify-full` 和受信 CA。以下主机、库、角色和证书路径需按部署替换：
 
@@ -78,3 +78,9 @@ TUNNEL_REQUIRE_POSTGRES_TESTS=1 TUNNEL_TEST_STORAGE=postgres go test -race -coun
 ```
 
 测试创建随机数据库并在清理时删除它们。缺测试 DSN 时普通本地回归跳过数据库测试；显式要求 PostgreSQL 时缺 DSN 会失败。工作流 postgres-storage 在 15/18 上强制执行，不以本地跳过当作数据库验收。存储格式和性能边界见 [设计](design/postgres-repository.md)。
+
+## 共享认证与升级
+
+HA-2 启动时把 PostgreSQL schema v1 事务升级为 v2；授权备份格式仍为 v10。正常重启保留尚未到期的 PostgreSQL 会话和 OIDC 待回调，JSON/SQLite 重启仍要求重新登录。更改公网 URL、OIDC 或 Keycloak 桥接策略会使旧共享会话失效。portable backup/restore 不携带认证运行记录，恢复后重新登录；应用长连接不能跨重启迁移。
+
+`node.id` 是自动创建的私有 consumer 标识，应与运行目录一同保留，不能作为节点认证凭据。生产仍只运行一个 Server。授权证明和撤销边界见 [共享认证设计](design/shared-authentication.md)。

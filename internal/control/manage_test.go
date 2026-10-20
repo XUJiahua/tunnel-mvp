@@ -224,7 +224,7 @@ func TestLiveWebSocketAndSSERevocation(t *testing.T) {
 			}
 			access, host, _ := f.grant(t, svc, login)
 			if action == "expiry" {
-				if err := f.s.authUpdate(context.Background(), false, func(a *state.AuthData, _ State, now time.Time) error {
+				if err := f.s.authUpdate(context.Background(), true, func(a *state.AuthData, _ State, now time.Time) error {
 					g := a.Access[digest(access.Value)]
 					g.Expires = now.Add(500 * time.Millisecond)
 					a.Access[digest(access.Value)] = g

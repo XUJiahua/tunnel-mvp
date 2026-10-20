@@ -1,10 +1,10 @@
 # PostgreSQL Repository（HA-1）
 
-本阶段增加 PostgreSQL 配置存储和两个独立存储客户端的事务一致性。服务仍只允许一个活跃控制面：会话、OIDC 交互、隧道路由、审计和监控尚未共享。HA-2/3/4 继续按 [HA 设计](control-plane-ha.md) 实施。
+本阶段增加 PostgreSQL 配置存储和两个独立存储客户端的事务一致性。服务仍只允许一个活跃控制面：会话和 OIDC 已由 [HA-2](shared-authentication.md) 共享；隧道路由、审计和监控尚未共享。HA-3/4 继续按 [HA 设计](control-plane-ha.md) 实施。
 
 ## 数据与事务
 
-使用纯 Go `github.com/lib/pq v1.12.3`。`tunnel_state` schema v1 保存授权模型 v10；portable backup 继续 v10，JSON/SQLite 格式不变。各实体以 JSONB payload 为规范数据，生成列提供用户名、OIDC issuer/subject、域名、资源和组织归属的数据库约束。grant、group member 与 credential 关系在同一事务维护。默认组织使用内部占位行，导出不包含它。数据库管理员仍是可信边界，不支持绕过 Repository 直接改表。
+使用纯 Go `github.com/lib/pq v1.12.3`。`tunnel_state` schema v2（从 v1 事务升级）保存授权模型 v10；portable backup 继续 v10，JSON/SQLite 格式不变。各实体以 JSONB payload 为规范数据，生成列提供用户名、OIDC issuer/subject、域名、资源和组织归属的数据库约束。grant、group member 与 credential 关系在同一事务维护。默认组织使用内部占位行，导出不包含它。数据库管理员仍是可信边界，不支持绕过 Repository 直接改表。
 
 每次变更先以 READ COMMITTED 锁定 singleton 修订行，再读取最新完整状态、调用变更函数、执行既有全量语义校验、写数据并递增修订号。等待锁的客户端读取上一事务提交后的状态。拒绝、校验错误、数据库写入/约束错误全部回滚；回调不会自动重放。唯一值交换使用延迟唯一约束，组织与资源引用由延迟外键约束。最后本地管理员保护在最新锁定状态上校验。
 
@@ -20,7 +20,7 @@
 
 每个 Repository 固定一个连接并在其生命周期持有数据库 advisory lock。独立存储客户端取共享锁；Server 和离线维护取互斥锁。运行期间不能另外启动 Server、shared repository 或维护命令。固定连接失效不能在新连接续租。
 
-单独连接每秒检查固定 backend PID 是否仍持锁，探测超时 5 秒。探测/网络异常使 Repository 不可用并通知 Server；控制面拒绝新请求、取消已有 HTTP/WS/SSE、断开 Agent 并清理会话和连接池。流程不等待配置访问锁，也不在故障通知中查询数据库，避免与正在失败的事务互锁。探测周期是失效检测机制，不是跨节点 HA SLA。
+固定连接独立于请求池，每秒检查原 backend PID 是否仍持锁，探测超时 5 秒。探测/网络异常使 Repository 不可用并通知 Server；控制面拒绝新请求、取消已有 HTTP/WS/SSE、断开 Agent 并清理会话和连接池。流程不等待配置访问锁，也不在故障通知中查询数据库，避免与正在失败的事务互锁。探测周期是失效检测机制，不是跨节点 HA SLA。
 
 Server 打开时还写持久 runtime_owner。正常关闭先取消应用流并等待 Agent 连接退出，再由原固定连接清除 owner。异常退出或固定连接断开不能清除标记，即使 advisory lock 已释放，新 Server 仍拒绝启动。运维必须先停止/外部隔离旧 Server，再明确执行恢复命令；不能因数据库恢复而自动接管。HA-3 将以租约/generation 及内部流 fencing 实现可验收的自动接管。
 
