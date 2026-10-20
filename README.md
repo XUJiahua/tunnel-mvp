@@ -37,6 +37,7 @@
 - [当前用户鉴权投影](docs/design/user-queries.md)与[查询故障手册](docs/user-query-operations.md)：直接/角色/组授权的一致读取和失败指标。
 
 - [交付基线与后续阶段](docs/release-readiness.md)、[v0.1.1 升级与恢复](docs/upgrade-v0.1.1.md)。
+- [Cloudflare 临时公网模拟](docs/cloudflare-simulation.md)：真实公网 HTTPS/WSS 与单机多进程站点；SSE 和物理内网边界单独记录。
 
 ## 已实现
 
