@@ -203,7 +203,7 @@ class Lab:
     def converged(self):
         def ready():
             nodes = self.client.api("/cluster/status")["nodes"]
-            return len(nodes) == 2 and all(node["fresh"] and not node["draining"] and
+            return len(nodes) == 2 and all(node["alive"] and node["fresh"] and not node["draining"] and
                                           node.get("report", {}).get("backlog", {}).get("pending", -1) == 0 for node in nodes)
         eventually(ready, "both nodes reporting with empty observation queues")
 
@@ -324,6 +324,7 @@ class Lab:
     def rotate_certificate(self):
         node_dir = self.runtime / "pki/node-b"
         before = hashlib.sha256((node_dir / "node.crt").read_bytes()).hexdigest()
+        eventually(lambda: self.client.status("/api/me", 28445) == 200, "B directed management listener recovered")
         self.client.api("/cluster/local/drain", {"nodeID": "node-b", "draining": True}, 28445)
         eventually(lambda: all(self.client.api("/cluster/status")["localNodeID"] == "node-a" for _ in range(8)), "LB removed B for certificate maintenance")
         self.compose("stop", "node-b")
@@ -356,6 +357,10 @@ class Lab:
         self.compose("build", "node-a", timeout=900, capture=False)
         self.compose("up", "-d", "database", "node-a", "node-b", "application", "edge", timeout=180, capture=False)
         eventually(lambda: self.health(28444) == 200 and self.health(28445) == 200, "initial nodes ready", 60)
+        version = self.compose("exec", "-T", "node-a", "/app/tunnel", "version").strip()
+        assert self.commit in version, "container binary does not identify the built source commit"
+        self.compose("exec", "-T", "node-a", "sh", "-c",
+                     "test -s /usr/share/licenses/tunnel/remotedialer-LICENSE && test -s /usr/share/licenses/tunnel/libpq-LICENSE")
         # Trust must actually be enforced; OS roots cannot trust the lab issuer.
         untrusted = Client.__new__(Client)
         untrusted.context, untrusted.cookies = ssl.create_default_context(), http.cookiejar.CookieJar()
@@ -370,7 +375,7 @@ class Lab:
         self.record("database pause, fail-closed fencing and explicit recovery", self.database_outage)
         self.record("same-CA leaf certificate rotation and cross-node mTLS", self.rotate_certificate)
         images = json.loads(self.compose("images", "--format", "json"))
-        return {"sourceCommit": self.commit, "postgresMajor": self.postgres, "images": images}
+        return {"sourceCommit": self.commit, "binaryVersion": version, "postgresMajor": self.postgres, "images": images}
 
     def save_logs(self):
         try:
@@ -412,6 +417,16 @@ def main():
         report["failure"] = type(error).__name__
         if isinstance(error, AssertionError):
             report["failure"] += ": " + str(error)
+        elif isinstance(error, urllib.error.HTTPError):
+            report["failure"] += f": HTTP {error.code} at {urllib.parse.urlsplit(error.url).path}"
+            try:
+                message = json.loads(error.read(2048)).get("error", "")
+                for value in lab.redactions:
+                    message = message.replace(value, "[REDACTED]")
+                report["failure"] += ": " + message
+            except (ValueError, OSError):
+                pass
+            error.close()
         print("FAIL deployment acceptance: " + report["failure"], file=sys.stderr)
     finally:
         report["checks"] = lab.results

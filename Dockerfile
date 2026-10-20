@@ -23,6 +23,8 @@ FROM alpine:3.23
 RUN apk add --no-cache ca-certificates && addgroup -S tunnel && adduser -S -G tunnel tunnel && mkdir -p /var/lib/tunnel && chown tunnel:tunnel /var/lib/tunnel
 WORKDIR /app
 COPY --from=backend /tunnel /app/tunnel
+COPY docs/licenses/ /usr/share/licenses/tunnel/
+COPY docs/third-party-dependencies.md /usr/share/licenses/tunnel/DEPENDENCIES.md
 USER tunnel
 EXPOSE 8080
 ENTRYPOINT ["/app/tunnel"]
