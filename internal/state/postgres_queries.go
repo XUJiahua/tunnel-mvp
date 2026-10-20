@@ -197,6 +197,9 @@ func (p *PostgresRepository) Directory(q DirectoryQuery) (DirectoryPage, error) 
 	}
 	var page DirectoryPage
 	err := p.read(context.Background(), func(ctx context.Context, tx *sql.Tx, meta pgMetadata) error {
+		if q.Filter.ExpectedRevision != nil && *q.Filter.ExpectedRevision != meta.Revision {
+			return ErrDirectoryChanged
+		}
 		after, scope, err := directoryStart(q, meta.InstanceID, meta.Revision)
 		if err != nil {
 			return err

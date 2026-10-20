@@ -8,40 +8,23 @@ import (
 	"sync"
 	"time"
 
+	"github.com/XUJiahua/tunnel-mvp/internal/state"
 	"golang.org/x/crypto/bcrypt"
 )
 
 const consoleCookie = "tunnel_console"
 const accessCookie = "tunnel_access"
 
-type session struct {
-	ID                          string
-	CreatedAt, LastSeen         time.Time
-	UserAgent, RemoteIP, Method string
-	Issuer, Subject, SID        string
-	UserID                      string
-	Expires                     time.Time
-}
-type grant struct {
-	SessionKey string
-	ServiceID  string
-	Expires    time.Time
-}
-type loginLimit struct {
-	Count int
-	Until time.Time
-}
+type session = state.AuthSession
+type grant = state.AuthGrant
+type loginLimit = state.AuthLimit
 type authState struct {
-	mu       sync.Mutex
-	sessions map[string]session
-	tickets  map[string]grant
-	access   map[string]grant
-	attempts map[string]loginLimit
+	mu sync.Mutex
+	state.AuthData
+	shared state.AuthRepository
 }
 
-func newAuth() *authState {
-	return &authState{sessions: map[string]session{}, tickets: map[string]grant{}, access: map[string]grant{}, attempts: map[string]loginLimit{}}
-}
+func newAuth() *authState { return &authState{AuthData: state.NewAuthData()} }
 func jsonOut(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
@@ -65,46 +48,22 @@ func decode(w http.ResponseWriter, r *http.Request, v any) bool {
 	}
 	return true
 }
-func (a *authState) clean(now time.Time) { // caller holds mu
-	for k, v := range a.sessions {
-		if now.After(v.Expires) {
-			delete(a.sessions, k)
-		}
-	}
-	for k, v := range a.tickets {
-		if _, ok := a.sessions[v.SessionKey]; !ok || now.After(v.Expires) {
-			delete(a.tickets, k)
-		}
-	}
-	for k, v := range a.access {
-		if _, ok := a.sessions[v.SessionKey]; !ok || now.After(v.Expires) {
-			delete(a.access, k)
-		}
-	}
-	for k, v := range a.attempts {
-		if now.After(v.Until) {
-			delete(a.attempts, k)
-		}
-	}
-}
+func (a *authState) clean(now time.Time) { a.AuthData.Clean(now) }
 func (s *Server) currentUser(r *http.Request) (User, string, bool) {
-	c, err := r.Cookie(consoleCookie)
+	cookie, err := r.Cookie(consoleCookie)
 	if err != nil {
 		return User{}, "", false
 	}
-	key := digest(c.Value)
-	s.auth.mu.Lock()
-	sess, ok := s.auth.sessions[key]
-	if ok && time.Since(sess.LastSeen) >= time.Minute {
-		sess.LastSeen = time.Now()
-		s.auth.sessions[key] = sess
-	}
-	s.auth.mu.Unlock()
-	if !ok || time.Now().After(sess.Expires) || !s.identitySessionAllowed(sess) {
+	key := digest(cookie.Value)
+	result, err := s.resolveAuth(r.Context(), "session", key)
+	if err != nil {
 		return User{}, "", false
 	}
-	u, ok := s.store.user(sess.UserID)
-	return u, key, ok && !u.Disabled
+	user, ok := s.resolvedUser(result)
+	if s.auth.shared != nil {
+		user.AuthRevision = &result.ConfigRevision
+	}
+	return user, key, ok
 }
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	s.accessMu.RLock()
@@ -116,33 +75,29 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &body) {
 		return
 	}
-	// Global bounded window prevents unbounded keyed maps and limits bcrypt work.
-	s.auth.mu.Lock()
-	s.auth.clean(time.Now())
-	lim := s.auth.attempts["login"]
-	if lim.Count >= 60 && time.Now().Before(lim.Until) {
-		s.auth.mu.Unlock()
+	allowed, err := s.authRateLimit(r.Context(), "login", 60, time.Minute)
+	if err != nil {
+		fail(w, 503, "authentication storage unavailable")
+		return
+	}
+	if !allowed {
 		fail(w, 429, "too many login attempts; retry in one minute")
 		return
 	}
-	if lim.Until.IsZero() {
-		lim.Until = time.Now().Add(time.Minute)
-	}
-	lim.Count++
-	s.auth.attempts["login"] = lim
-	s.auth.mu.Unlock()
 	found, exists := s.store.userByUsername(body.Username)
 	hash := found.PasswordHash
 	if hash == "" {
 		hash = s.dummyHash
 	}
-	err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(body.Password))
+	err = bcrypt.CompareHashAndPassword([]byte(hash), []byte(body.Password))
 	if err != nil || !exists || found.ID == "" || found.Disabled || found.PasswordHash == "" {
 		s.audit("login_failed", body.Username, "", "")
 		fail(w, 401, "invalid username or password")
 		return
 	}
-	s.issueSession(w, found, time.Now().Add(12*time.Hour), sessionMetadata(r, "password", "", "", ""))
+	if !s.issueSession(w, found, time.Now().Add(12*time.Hour), sessionMetadata(r, "password", "", "", "")) {
+		return
+	}
 	s.audit("login", found.Username, "", "")
 	found, _ = s.store.user(found.ID)
 	jsonOut(w, 200, publicUser(found))

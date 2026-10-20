@@ -4,12 +4,10 @@ import (
 	"context"
 	"crypto/rand"
 	"database/sql"
-	"database/sql/driver"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -46,6 +44,7 @@ type PostgresRepository struct {
 	runtime        bool
 	owner          string
 	authPolicyHash string
+	allowRecovery  bool
 	pid            int
 	closed         atomic.Bool
 	lost           atomic.Bool
@@ -93,9 +92,9 @@ func openPostgres(ctx context.Context, dsn string, options pgOpenOptions) (*Post
 	if err != nil {
 		return nil, pgSafeError(err)
 	}
-	db.SetMaxOpenConns(2)
-	db.SetMaxIdleConns(1)
-	p := &PostgresRepository{db: db, exclusive: options.exclusive, runtime: options.runtime, loss: make(chan struct{})}
+	db.SetMaxOpenConns(4)
+	db.SetMaxIdleConns(2)
+	p := &PostgresRepository{db: db, exclusive: options.exclusive, runtime: options.runtime, allowRecovery: options.recover, loss: make(chan struct{})}
 	success := false
 	defer func() {
 		if !success {
@@ -250,9 +249,9 @@ func (p *PostgresRepository) probe(ctx context.Context) {
 			return
 		case <-ticker.C:
 		}
-		checkCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		checkCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		var held bool
-		err := p.db.QueryRowContext(checkCtx, `SELECT EXISTS(SELECT 1 FROM pg_catalog.pg_locks WHERE locktype='advisory' AND pid=$1 AND classid=$2 AND objid=$3 AND objsubid=2 AND mode=$4 AND granted AND database=(SELECT oid FROM pg_catalog.pg_database WHERE datname=current_database()))`, p.pid, pgNamespace, pgRuntimeKey, mode).Scan(&held)
+		err := p.conn.QueryRowContext(checkCtx, `SELECT EXISTS(SELECT 1 FROM pg_catalog.pg_locks WHERE locktype='advisory' AND pid=$1 AND classid=$2 AND objid=$3 AND objsubid=2 AND mode=$4 AND granted AND database=(SELECT oid FROM pg_catalog.pg_database WHERE datname=current_database()))`, p.pid, pgNamespace, pgRuntimeKey, mode).Scan(&held)
 		cancel()
 		if ctx.Err() != nil {
 			return
@@ -276,10 +275,8 @@ func (p *PostgresRepository) failed(err error, read bool) error {
 	if read && !errors.Is(err, ErrDirectoryChanged) && !errors.Is(err, ErrDirectoryQuery) {
 		p.failures.Add(1)
 	}
-	var network net.Error
-	if errors.Is(err, sql.ErrConnDone) || errors.Is(err, driver.ErrBadConn) || errors.Is(err, io.EOF) || errors.As(err, &network) {
-		p.fence()
-	}
+	// A request-cancelled data connection may be replaced by the query pool.
+	// Only the pinned holder's heartbeat/lock/owner checks fence the runtime.
 	return pgSafeError(err)
 }
 func (p *PostgresRepository) read(ctx context.Context, fn func(context.Context, *sql.Tx, pgMetadata) error) error {
@@ -290,13 +287,16 @@ func (p *PostgresRepository) read(ctx context.Context, fn func(context.Context, 
 	}
 	ctx, cancel := context.WithTimeout(ctx, pgOperationTimeout)
 	defer cancel()
-	tx, err := p.conn.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+	tx, err := p.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
 	if err != nil {
 		return p.failed(err, true)
 	}
 	defer tx.Rollback()
+	if err = p.validateLease(ctx, tx); err != nil {
+		return p.failed(err, true)
+	}
 	meta, err := pgReadMeta(ctx, tx, "")
-	if err == nil && p.runtime && meta.Owner != p.owner {
+	if err == nil && (p.runtime && meta.Owner != p.owner || !p.runtime && !p.allowRecovery && meta.Owner != "") {
 		p.fence()
 		err = ErrPostgresUnavailable
 	}
@@ -305,6 +305,9 @@ func (p *PostgresRepository) read(ctx context.Context, fn func(context.Context, 
 	}
 	if err == nil {
 		err = p.check()
+	}
+	if err == nil {
+		err = p.validateLease(ctx, tx)
 	}
 	if err == nil {
 		err = tx.Commit()
@@ -359,11 +362,14 @@ func (p *PostgresRepository) transact(ctx context.Context, expected *uint64, aut
 	}
 	ctx, cancel := context.WithTimeout(ctx, pgOperationTimeout)
 	defer cancel()
-	tx, err := p.conn.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	tx, err := p.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
 		return p.failed(err, false)
 	}
 	defer tx.Rollback()
+	if err = p.validateLease(ctx, tx); err != nil {
+		return p.failed(err, false)
+	}
 	// This row is locked BEFORE reading configuration or invoking the callback.
 	// Waiting writers read the latest commit under READ COMMITTED. A callback runs
 	// once, avoiding unsafe automatic replay of captured response variables.
@@ -371,7 +377,7 @@ func (p *PostgresRepository) transact(ctx context.Context, expected *uint64, aut
 	if err != nil {
 		return p.failed(err, false)
 	}
-	if p.runtime && meta.Owner != p.owner {
+	if p.runtime && meta.Owner != p.owner || !p.runtime && !p.allowRecovery && meta.Owner != "" {
 		p.fence()
 		return ErrPostgresUnavailable
 	}
@@ -403,7 +409,7 @@ func (p *PostgresRepository) transact(ctx context.Context, expected *uint64, aut
 		}
 	}
 	before := Clone(st)
-	previousAuth, err := cloneAuth(auth)
+	previousAuth, err := CloneAuthData(auth)
 	if err != nil {
 		return err
 	}
@@ -431,6 +437,9 @@ func (p *PostgresRepository) transact(ctx context.Context, expected *uint64, aut
 	}
 	if err = p.check(); err != nil {
 		return err
+	}
+	if err = p.validateLease(ctx, tx); err != nil {
+		return p.failed(err, false)
 	}
 	if err = pgAuthEvent(ctx, tx, meta.Revision+1, "config"); err != nil {
 		return p.failed(err, false)
@@ -497,4 +506,21 @@ func (p *PostgresRepository) Close() error {
 		}
 	}
 	return pgSafeError(closeErr)
+}
+
+func (p *PostgresRepository) validateLease(ctx context.Context, tx *sql.Tx) error {
+	mode := "ShareLock"
+	if p.exclusive {
+		mode = "ExclusiveLock"
+	}
+	var held bool
+	err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM pg_catalog.pg_locks WHERE locktype='advisory' AND pid=$1 AND classid=$2 AND objid=$3 AND objsubid=2 AND mode=$4 AND granted AND database=(SELECT oid FROM pg_catalog.pg_database WHERE datname=current_database()))`, p.pid, pgNamespace, pgRuntimeKey, mode).Scan(&held)
+	if err != nil {
+		return err
+	}
+	if !held {
+		p.fence()
+		return ErrPostgresUnavailable
+	}
+	return nil
 }

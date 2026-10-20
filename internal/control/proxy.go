@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"github.com/XUJiahua/tunnel-mvp/internal/diagnostics"
+	"github.com/XUJiahua/tunnel-mvp/internal/state"
 	"log/slog"
 	"net"
 	"net/http"
@@ -41,10 +42,46 @@ func (s *Server) launch(w http.ResponseWriter, r *http.Request, u User) {
 	}
 	_, key, _ := s.currentUser(r)
 	token := randomID()
-	s.auth.mu.Lock()
-	s.auth.clean(time.Now())
-	s.auth.tickets[digest(token)] = grant{key, svc.ID, time.Now().Add(30 * time.Second)}
-	s.auth.mu.Unlock()
+	err := s.authUpdate(r.Context(), true, func(a *state.AuthData, st State, now time.Time) error {
+		sess, ok := a.Sessions[key]
+		if !ok || !now.Before(sess.Expires) {
+			return state.ErrAuthChanged
+		}
+		var actor User
+		found := false
+		for _, v := range st.Users {
+			if v.ID == sess.UserID && !v.Disabled {
+				actor = effectiveUser(st, v)
+				found = true
+				break
+			}
+		}
+		var current Service
+		serviceFound := false
+		for _, v := range st.Services {
+			if v.ID == svc.ID {
+				current = v
+				serviceFound = true
+				break
+			}
+		}
+		if !found || !serviceFound || !canAccessService(actor, current) || !s.authIdentityAllowed(*a, sess, now) {
+			return state.ErrAuthChanged
+		}
+		if len(a.Tickets) >= 8192 {
+			return state.ErrAuthCapacity
+		}
+		expires := now.Add(30 * time.Second)
+		if sess.Expires.Before(expires) {
+			expires = sess.Expires
+		}
+		a.Tickets[digest(token)] = grant{key, svc.ID, expires}
+		return nil
+	})
+	if err != nil {
+		fail(w, 503, "authentication changed or unavailable; reopen from console")
+		return
+	}
 	dest := s.serviceURL(svc.ID)
 	dest.Path = "/_tunnel/entry"
 	dest.RawQuery = url.Values{"ticket": []string{token}}.Encode()
@@ -55,9 +92,10 @@ func (s *Server) validGrant(g grant, serviceID string) (User, bool) {
 	if g.ServiceID != serviceID || time.Now().After(g.Expires) {
 		return User{}, false
 	}
-	s.auth.mu.Lock()
-	sess, ok := s.auth.sessions[g.SessionKey]
-	s.auth.mu.Unlock()
+	sess, ok, err := s.authSession(context.Background(), g.SessionKey)
+	if err != nil {
+		return User{}, false
+	}
 	if !ok || time.Now().After(sess.Expires) || !s.identitySessionAllowed(sess) {
 		return User{}, false
 	}
@@ -86,21 +124,53 @@ func (s *Server) gateway(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		key := digest(r.URL.Query().Get("ticket"))
-		s.auth.mu.Lock()
-		g, found := s.auth.tickets[key]
-		delete(s.auth.tickets, key)
-		s.auth.mu.Unlock()
-		u, valid := s.validGrant(g, id)
-		if !found || !valid || !canAccessService(u, svc) {
+		token := randomID()
+		err := s.authUpdate(r.Context(), true, func(a *state.AuthData, st State, now time.Time) error {
+			g, found := a.Tickets[key]
+			if !found || g.ServiceID != id || !now.Before(g.Expires) {
+				return state.ErrAuthChanged
+			}
+			sess, found := a.Sessions[g.SessionKey]
+			if !found || !now.Before(sess.Expires) || !s.authIdentityAllowed(*a, sess, now) {
+				return state.ErrAuthChanged
+			}
+			var user User
+			exists := false
+			for _, v := range st.Users {
+				if v.ID == sess.UserID && !v.Disabled {
+					user = effectiveUser(st, v)
+					exists = true
+					break
+				}
+			}
+			var current Service
+			serviceFound := false
+			for _, v := range st.Services {
+				if v.ID == id {
+					current = v
+					serviceFound = true
+					break
+				}
+			}
+			if !exists || !serviceFound || !canAccessService(user, current) || !s.matchesServiceHost(current, r.Host) {
+				return state.ErrAuthChanged
+			}
+			if len(a.Access) >= 8192 {
+				return state.ErrAuthCapacity
+			}
+			delete(a.Tickets, key)
+			g.Expires = now.Add(time.Hour)
+			if sess.Expires.Before(g.Expires) {
+				g.Expires = sess.Expires
+			}
+			a.Access[digest(token)] = g
+			svc = current
+			return nil
+		})
+		if err != nil {
 			fail(w, 401, "access ticket expired or invalid; reopen from console")
 			return
 		}
-		token := randomID()
-		g.Expires = time.Now().Add(time.Hour)
-		s.auth.mu.Lock()
-		s.auth.clean(time.Now())
-		s.auth.access[digest(token)] = g
-		s.auth.mu.Unlock()
 		http.SetCookie(w, &http.Cookie{Name: accessCookie, Value: token, Path: "/", HttpOnly: true, Secure: s.secure, SameSite: http.SameSiteLaxMode, MaxAge: 3600})
 		http.Redirect(w, r, mountPath(svc.URL), http.StatusSeeOther)
 		return
@@ -110,14 +180,27 @@ func (s *Server) gateway(w http.ResponseWriter, r *http.Request) {
 		fail(w, 401, "open this application from the control plane")
 		return
 	}
-	s.auth.mu.Lock()
-	g, ok := s.auth.access[digest(c.Value)]
-	s.auth.mu.Unlock()
-	u, valid := s.validGrant(g, id)
-	if !ok || !valid || !canAccessService(u, svc) {
+	proofStarted := time.Now()
+	resolution, err := s.resolveAuth(r.Context(), "access", digest(c.Value))
+	if err != nil {
+		fail(w, 503, "authentication storage unavailable")
+		return
+	}
+	u, valid := s.resolvedUser(resolution)
+	g := resolution.Grant
+	current, found := Service{}, false
+	for _, v := range resolution.State.Services {
+		if v.ID == id {
+			current = v
+			found = true
+			break
+		}
+	}
+	if !valid || !found || g.ServiceID != id || !canAccessService(u, current) || !s.matchesServiceHost(current, r.Host) {
 		fail(w, 401, "access expired; reopen from console")
 		return
 	}
+	svc = current
 	if !s.siteOnline(svc.SiteID) {
 		fail(w, 503, "site is offline")
 		return
@@ -125,7 +208,7 @@ func (s *Server) gateway(w http.ResponseWriter, r *http.Request) {
 	if !s.mountGuard(w, r, svc) {
 		return
 	}
-	ctx, release := s.trackRequest(r.Context(), u, g)
+	ctx, release := s.trackRequest(r.Context(), u, g, digest(c.Value), resolution, proofStarted)
 	defer release()
 	r = r.WithContext(ctx)
 	target, _ := url.Parse(svc.URL)
@@ -214,8 +297,15 @@ func (s *Server) transport(siteID string, serviceIDs ...string) *http.Transport 
 }
 func (s *Server) probe(w http.ResponseWriter, r *http.Request, u User) {
 	s.accessMu.RLock()
-	fresh, key, valid := s.currentUser(r)
-	if !valid {
+	proofStarted := time.Now()
+	cookie, cookieErr := r.Cookie(consoleCookie)
+	key := ""
+	if cookieErr == nil {
+		key = digest(cookie.Value)
+	}
+	resolution, err := s.resolveAuth(r.Context(), "session", key)
+	fresh, valid := s.resolvedUser(resolution)
+	if err != nil || !valid {
 		s.accessMu.RUnlock()
 		fail(w, 401, "sign in required")
 		return
@@ -227,7 +317,8 @@ func (s *Server) probe(w http.ResponseWriter, r *http.Request, u User) {
 		fail(w, 404, "service not found")
 		return
 	}
-	ctx, release := s.trackRequest(r.Context(), u, grant{SessionKey: key, ServiceID: svc.ID, Expires: time.Now().Add(14 * time.Second)})
+	resolution.State.Services = []Service{svc}
+	ctx, release := s.trackRequest(r.Context(), u, grant{SessionKey: key, ServiceID: svc.ID, Expires: time.Now().Add(14 * time.Second)}, "", resolution, proofStarted)
 	s.accessMu.RUnlock()
 	defer release()
 	report := s.checkService(ctx, svc)
@@ -276,4 +367,8 @@ func (s *Server) checkService(parent context.Context, svc Service) probeReport {
 		report.Healthy = resp.StatusCode == svc.HealthExpectedStatus
 	}
 	return report
+}
+
+func (s *Server) matchesServiceHost(svc Service, host string) bool {
+	return strings.EqualFold(host, svc.ID+"."+s.access.Host) || svc.CustomDomain != "" && strings.EqualFold(host, customHost(svc.CustomDomain, s.access))
 }

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"time"
 
 	"github.com/lib/pq"
@@ -12,7 +13,7 @@ import (
 
 const authOperationTimeout = 3 * time.Second
 
-func cloneAuth(a AuthData) (AuthData, error) {
+func CloneAuthData(a AuthData) (AuthData, error) {
 	raw, err := json.Marshal(a)
 	if err != nil {
 		return AuthData{}, err
@@ -32,16 +33,19 @@ func (p *PostgresRepository) authWrite(ctx context.Context, fn func(context.Cont
 	if err := p.check(); err != nil {
 		return err
 	}
-	tx, err := p.conn.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	tx, err := p.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
 		return p.failed(err, false)
 	}
 	defer tx.Rollback()
+	if err = p.validateLease(ctx, tx); err != nil {
+		return p.failed(err, false)
+	}
 	m, err := pgReadMeta(ctx, tx, " FOR UPDATE")
 	if err != nil {
 		return p.failed(err, false)
 	}
-	if p.runtime && m.Owner != p.owner {
+	if p.runtime && m.Owner != p.owner || !p.runtime && !p.allowRecovery && m.Owner != "" {
 		p.fence()
 		return ErrPostgresUnavailable
 	}
@@ -57,6 +61,9 @@ func (p *PostgresRepository) authWrite(ctx context.Context, fn func(context.Cont
 	}
 	if err = p.check(); err != nil {
 		return err
+	}
+	if err = p.validateLease(ctx, tx); err != nil {
+		return p.failed(err, false)
 	}
 	return p.failed(tx.Commit(), false)
 }
@@ -106,7 +113,7 @@ func (p *PostgresRepository) AuthUpdate(ctx context.Context, withConfig bool, fn
 			return p.failed(err, false)
 		}
 		data.Clean(now)
-		before, err := cloneAuth(data)
+		before, err := CloneAuthData(data)
 		if err != nil {
 			return err
 		}
@@ -125,6 +132,9 @@ func (p *PostgresRepository) AuthUpdate(ctx context.Context, withConfig bool, fn
 			return err
 		}
 		// Session/grant creation must use the locked configuration in this callback.
+		if !reflect.DeepEqual(before.Identities, data.Identities) {
+			return fmt.Errorf("identity status requires a fenced identity check")
+		}
 		if !withConfig {
 			for k, v := range data.Sessions {
 				old, ok := before.Sessions[k]
@@ -206,16 +216,19 @@ func (p *PostgresRepository) AuthBindPolicy(ctx context.Context, policy string) 
 	if p.authPolicyHash != "" && p.authPolicyHash != policy {
 		return ErrAuthPolicy
 	}
-	tx, err := p.conn.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	tx, err := p.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
 		return p.failed(err, false)
 	}
 	defer tx.Rollback()
+	if err = p.validateLease(ctx, tx); err != nil {
+		return p.failed(err, false)
+	}
 	m, err := pgReadMeta(ctx, tx, " FOR UPDATE")
 	if err != nil {
 		return p.failed(err, false)
 	}
-	if p.runtime && m.Owner != p.owner {
+	if p.runtime && m.Owner != p.owner || !p.runtime && !p.allowRecovery && m.Owner != "" {
 		p.fence()
 		return ErrPostgresUnavailable
 	}
@@ -240,6 +253,9 @@ func (p *PostgresRepository) AuthBindPolicy(ctx context.Context, policy string) 
 	if err = p.check(); err != nil {
 		return err
 	}
+	if err = p.validateLease(ctx, tx); err != nil {
+		return p.failed(err, false)
+	}
 	if err = tx.Commit(); err != nil {
 		return p.failed(err, false)
 	}
@@ -253,7 +269,8 @@ func (p *PostgresRepository) AuthResolve(ctx context.Context, kind, key string) 
 	ctx, cancel := context.WithTimeout(ctx, authOperationTimeout)
 	defer cancel()
 	var out AuthResolution
-	err := p.read(ctx, func(ctx context.Context, tx *sql.Tx, _ pgMetadata) error {
+	err := p.read(ctx, func(ctx context.Context, tx *sql.Tx, meta pgMetadata) error {
+		out.ConfigRevision = meta.Revision
 		if err := p.authPolicy(ctx, tx); err != nil {
 			return err
 		}
@@ -283,6 +300,21 @@ func (p *PostgresRepository) AuthResolve(ctx context.Context, kind, key string) 
 		out.Session, exists = data.Sessions[sessionKey]
 		if !exists {
 			return nil
+		}
+
+		if out.Session.IdentityEpoch != "" {
+			status, found, e := pgIdentityStatus(ctx, tx, out.Session.UserID)
+			if e != nil {
+				return e
+			}
+			if found {
+				data.Identities[status.UserID] = status
+				out.Identity = status
+			}
+			data.Clean(out.Now)
+			if _, exists = data.Sessions[sessionKey]; !exists {
+				return nil
+			}
 		}
 		if err = validateAuth(data, out.Now); err != nil {
 			return err
@@ -329,7 +361,7 @@ func (p *PostgresRepository) authTouch(ctx context.Context, key, id string) erro
 	}
 	// This is only display metadata: a conditional UPDATE cannot recreate a
 	// revoked session and does not need the security-writer revision lock.
-	_, err := p.conn.ExecContext(ctx, `UPDATE tunnel_state.auth_records SET payload=jsonb_set(payload,'{LastSeen}',to_jsonb(clock_timestamp())) WHERE kind='session' AND key=$1 AND public_id=$2 AND expires_at>clock_timestamp() AND (payload->>'LastSeen')::timestamptz<clock_timestamp()-interval '1 minute'`, key, id)
+	_, err := p.db.ExecContext(ctx, `UPDATE tunnel_state.auth_records SET payload=jsonb_set(payload,'{LastSeen}',to_jsonb(clock_timestamp())) WHERE kind='session' AND key=$1 AND public_id=$2 AND expires_at>clock_timestamp() AND (payload->>'LastSeen')::timestamptz<clock_timestamp()-interval '1 minute'`, key, id)
 	return p.failed(err, false)
 }
 func (p *PostgresRepository) AuthSnapshotForKeys(ctx context.Context, accessKeys, sessionKeys, serviceIDs []string) (AuthSnapshot, error) {
@@ -352,6 +384,18 @@ func (p *PostgresRepository) AuthSnapshotForKeys(ctx context.Context, accessKeys
 		if err != nil {
 			return err
 		}
+		for _, session := range out.Data.Sessions {
+			if session.IdentityEpoch != "" {
+				v, found, e := pgIdentityStatus(ctx, tx, session.UserID)
+				if e != nil {
+					return e
+				}
+				if found {
+					out.Data.Identities[v.UserID] = v
+				}
+			}
+		}
+		out.Data.Clean(out.Now)
 		users := map[string]bool{}
 		roles := map[string]bool{}
 		groups := map[string]bool{}

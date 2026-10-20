@@ -16,6 +16,7 @@ var ErrAuthPolicy = errors.New("shared authentication policy mismatch; stop all 
 // Runtime credentials are deliberately excluded from configuration backups.
 // Map keys for bearer credentials are SHA-256 digests, never browser tokens.
 type AuthSession struct {
+	IdentityEpoch               string `json:",omitempty"`
 	ID                          string
 	CreatedAt, LastSeen         time.Time
 	UserAgent, RemoteIP, Method string
@@ -36,7 +37,15 @@ type AuthOIDCAttempt struct {
 	Issuer, ClientID, RedirectURI string
 	Expires, Started              time.Time
 }
+type AuthIdentityStatus struct {
+	Revoked                                                     uint64 `json:"-"`
+	UserID                                                      string
+	Issuer, Subject, Epoch, CheckID                             string
+	Pending, CheckSucceeded, Enabled                            bool
+	StartedAt, CompletedAt, VerifiedAt, ValidUntil, RetainUntil time.Time
+}
 type AuthData struct {
+	Identities      map[string]AuthIdentityStatus
 	Sessions        map[string]AuthSession
 	Tickets, Access map[string]AuthGrant
 	Limits          map[string]AuthLimit
@@ -45,9 +54,12 @@ type AuthData struct {
 }
 
 func NewAuthData() AuthData {
-	return AuthData{map[string]AuthSession{}, map[string]AuthGrant{}, map[string]AuthGrant{}, map[string]AuthLimit{}, map[string]AuthOIDCAttempt{}, map[string]time.Time{}, map[string]time.Time{}}
+	return AuthData{Sessions: map[string]AuthSession{}, Tickets: map[string]AuthGrant{}, Access: map[string]AuthGrant{}, Limits: map[string]AuthLimit{}, Pending: map[string]AuthOIDCAttempt{}, Replay: map[string]time.Time{}, Cutoff: map[string]time.Time{}, Identities: map[string]AuthIdentityStatus{}}
 }
 func (a *AuthData) normalize() {
+	if a.Identities == nil {
+		a.Identities = map[string]AuthIdentityStatus{}
+	}
 	if a.Sessions == nil {
 		a.Sessions = map[string]AuthSession{}
 	}
@@ -72,8 +84,13 @@ func (a *AuthData) normalize() {
 }
 func (a *AuthData) Clean(now time.Time) {
 	a.normalize()
+	for k, v := range a.Identities {
+		if !now.Before(v.RetainUntil) {
+			delete(a.Identities, k)
+		}
+	}
 	for key, s := range a.Sessions {
-		if !now.Before(s.Expires) {
+		if !now.Before(s.Expires) || s.IdentityEpoch != "" && !AuthIdentityAllowed(a.Identities[s.UserID], s, now) {
 			delete(a.Sessions, key)
 		}
 	}
@@ -113,11 +130,13 @@ type AuthSnapshot struct {
 	EventID, ConfigRevision uint64
 }
 type AuthResolution struct {
-	Session AuthSession
-	Grant   AuthGrant
-	State   State
-	Now     time.Time
-	Found   bool
+	ConfigRevision uint64
+	Identity       AuthIdentityStatus
+	Session        AuthSession
+	Grant          AuthGrant
+	State          State
+	Now            time.Time
+	Found          bool
 }
 type AuthEvent struct {
 	ID, Revision uint64
@@ -141,6 +160,9 @@ type AuthRepository interface {
 	AuthPoll(context.Context, string, int) (AuthEvents, error)
 	AuthAcknowledge(context.Context, string, uint64) error
 	AuthMaintenance(context.Context) error
+	AuthIdentityStart(context.Context, string, Identity) (AuthIdentityStatus, bool, error)
+	AuthIdentityFinish(context.Context, string, string, bool, bool, time.Duration) (AuthIdentityStatus, bool, error)
+	AuthIdentityRead(context.Context, string) (AuthIdentityStatus, bool, time.Time, error)
 	UpdateAuthenticated(context.Context, func(State, AuthData, time.Time) error, func(*State) error) error
 }
 
@@ -158,8 +180,13 @@ func authHash(key string) bool {
 	return true
 }
 func validateAuth(a AuthData, now time.Time) error {
-	if len(a.Sessions) > 4096 || len(a.Tickets) > 8192 || len(a.Access) > 8192 || len(a.Limits) > 256 || len(a.Pending) > 256 || len(a.Replay) > 4096 || len(a.Cutoff) > 4096 {
+	if len(a.Sessions) > 4096 || len(a.Tickets) > 8192 || len(a.Access) > 8192 || len(a.Limits) > 256 || len(a.Pending) > 256 || len(a.Replay) > 4096 || len(a.Cutoff) > 4096 || len(a.Identities) > 4096 {
 		return ErrAuthCapacity
+	}
+	for key, v := range a.Identities {
+		if key != v.UserID || !resourceID.MatchString(key) || ValidateIdentity(Identity{v.Issuer, v.Subject}) != nil || len(v.Epoch) != 32 || len(v.CheckID) != 32 || v.StartedAt.IsZero() || !now.Before(v.RetainUntil) {
+			return fmt.Errorf("invalid shared identity status")
+		}
 	}
 	ids := map[string]bool{}
 	for key, s := range a.Sessions {
@@ -167,6 +194,12 @@ func validateAuth(a AuthData, now time.Time) error {
 			return fmt.Errorf("invalid shared session")
 		}
 		ids[s.ID] = true
+		if s.Method == "password" && s.IdentityEpoch != "" {
+			return fmt.Errorf("password session cannot carry identity proof")
+		}
+		if s.IdentityEpoch != "" && !AuthIdentityAllowed(a.Identities[s.UserID], s, now) {
+			return fmt.Errorf("identity proof expired")
+		}
 		if s.Method == "oidc" && (ValidateIdentity(Identity{s.Issuer, s.Subject}) != nil || len(s.SID) > 1024) {
 			return fmt.Errorf("invalid shared OIDC session")
 		}
@@ -226,6 +259,12 @@ func authReconcile(a *AuthData, before, after State, now time.Time) {
 			changed[u.ID] = true
 		}
 	}
+	for key, v := range a.Identities {
+		u, ok := users[key]
+		if !ok || u.Identity == nil || u.Identity.Issuer != v.Issuer || u.Identity.Subject != v.Subject {
+			delete(a.Identities, key)
+		}
+	}
 	for key, s := range a.Sessions {
 		if _, ok := users[s.UserID]; !ok || changed[s.UserID] {
 			delete(a.Sessions, key)
@@ -253,8 +292,12 @@ func authReconcile(a *AuthData, before, after State, now time.Time) {
 }
 func authKind(kind string) bool {
 	switch kind {
-	case "session", "ticket", "access", "limit", "oidc", "replay", "cutoff":
+	case "session", "ticket", "access", "limit", "oidc", "replay", "cutoff", "identity":
 		return true
 	}
 	return false
+}
+
+func AuthIdentityAllowed(status AuthIdentityStatus, s AuthSession, now time.Time) bool {
+	return status.UserID == s.UserID && status.Issuer == s.Issuer && status.Subject == s.Subject && status.Epoch == s.IdentityEpoch && status.Enabled && now.Before(status.ValidUntil)
 }

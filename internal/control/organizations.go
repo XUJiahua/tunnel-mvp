@@ -168,7 +168,7 @@ func (s *Server) manageOrganization(w http.ResponseWriter, r *http.Request, u Us
 		id = randomID()[:16]
 	}
 	out := state.Organization{ID: id, Name: body.Name}
-	err := s.store.update(func(st *State) error {
+	err := s.updateAuthorized(r, u, func(st *State) error {
 		if create {
 			st.Organizations = append(st.Organizations, out)
 			return nil
@@ -311,7 +311,7 @@ func (s *Server) manageRole(w http.ResponseWriter, r *http.Request, u User) {
 	}
 	out := state.Role{ID: id, Name: strings.TrimSpace(body.Name), OrganizationID: org, Permissions: body.Permissions}
 	affected := []string{}
-	err = s.store.update(func(st *State) error {
+	err = s.updateAuthorized(r, u, func(st *State) error {
 		if create {
 			if !canManage(u, org, "roles:manage") {
 				return fmt.Errorf("role management permission required")
@@ -370,7 +370,7 @@ func (s *Server) assignRole(w http.ResponseWriter, r *http.Request, u User) {
 		return
 	}
 	var out User
-	err := s.store.update(func(st *State) error {
+	err := s.updateAuthorized(r, u, func(st *State) error {
 		for i := range st.Users {
 			m := &st.Users[i]
 			if m.ID != r.PathValue("id") {

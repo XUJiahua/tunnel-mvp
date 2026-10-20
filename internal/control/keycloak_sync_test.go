@@ -62,6 +62,12 @@ func syncFixture(t *testing.T) (*fixture, *keycloakSync, User, *http.Cookie, *at
 		t.Fatal(e)
 	}
 	u, _ = f.s.store.user(u.ID)
+	// Binding changes invalidate existing sessions on shared storage.
+	loginResponse, _ := f.request(t, "POST", "/api/login", map[string]string{"username": u.Username, "password": testPassword}, nil, "")
+	if loginResponse.StatusCode != 200 {
+		t.Fatal("recovery login after binding change failed")
+	}
+	passwordCookie = loginResponse.Cookies()[0]
 	f.s.cfg.OIDC = config.OIDC{Issuer: issuer, ClientID: "browser", KeycloakSync: config.KeycloakSync{Enabled: true, ClientID: "reader", SubjectIsUserID: true, PollSeconds: 1, MaxStaleSeconds: 10}}
 	f.s.oidc = &oidcLogin{config: oauth2.Config{Endpoint: oauth2.Endpoint{TokenURL: issuer + "/protocol/openid-connect/token"}}}
 	t.Setenv("TUNNEL_KEYCLOAK_SYNC_CLIENT_SECRET", "fixture-secret+/=")
@@ -135,9 +141,10 @@ func TestKeycloakSyncFailureExpiresAndFailsClosed(t *testing.T) {
 		t.Fatal("stale status allowed new request")
 	}
 	k.expire()
-	f.s.auth.mu.Lock()
-	_, exists := f.s.auth.sessions[digest(cookie.Value)]
-	f.s.auth.mu.Unlock()
+	_, exists, err := f.s.authSession(context.Background(), digest(cookie.Value))
+	if err != nil {
+		t.Fatal(err)
+	}
 	if exists {
 		t.Fatal("expired OIDC session not removed")
 	}

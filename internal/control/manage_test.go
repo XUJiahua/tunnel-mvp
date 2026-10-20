@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"github.com/XUJiahua/tunnel-mvp/internal/state"
 	"io"
 	"net"
 	"net/http"
@@ -223,11 +224,14 @@ func TestLiveWebSocketAndSSERevocation(t *testing.T) {
 			}
 			access, host, _ := f.grant(t, svc, login)
 			if action == "expiry" {
-				f.s.auth.mu.Lock()
-				g := f.s.auth.access[digest(access.Value)]
-				g.Expires = time.Now().Add(500 * time.Millisecond)
-				f.s.auth.access[digest(access.Value)] = g
-				f.s.auth.mu.Unlock()
+				if err := f.s.authUpdate(context.Background(), false, func(a *state.AuthData, _ State, now time.Time) error {
+					g := a.Access[digest(access.Value)]
+					g.Expires = now.Add(500 * time.Millisecond)
+					a.Access[digest(access.Value)] = g
+					return nil
+				}); err != nil {
+					t.Fatal(err)
+				}
 			}
 			ws, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(f.h.URL, "http")+"/ws", http.Header{"Host": []string{host}, "Cookie": []string{access.String()}})
 			if err != nil {

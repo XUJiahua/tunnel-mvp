@@ -1,6 +1,7 @@
 package control
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strings"
@@ -72,7 +73,7 @@ func (s *Server) createInvite(w http.ResponseWriter, r *http.Request, actor User
 		fail(w, 401, "administrator sign in required")
 		return
 	}
-	err := s.store.update(func(st *State) error {
+	err := s.updateAuthorized(r, actor, func(st *State) error {
 		// Expired invites stop reserving a username when a new invite is created.
 		active := []state.Invite{}
 		for _, v := range st.Invites {
@@ -100,7 +101,7 @@ func (s *Server) deleteInvite(w http.ResponseWriter, r *http.Request, actor User
 	}
 	id := r.PathValue("id")
 	org := ""
-	err := s.store.update(func(st *State) error {
+	err := s.updateAuthorized(r, actor, func(st *State) error {
 		for i, v := range st.Invites {
 			if v.ID == id && canManage(actor, v.OrganizationID, "groups:manage") {
 				org = v.OrganizationID
@@ -117,29 +118,20 @@ func (s *Server) deleteInvite(w http.ResponseWriter, r *http.Request, actor User
 	s.audit("invitation_revoked", actor.Username, "", id, map[string]any{"organizationID": org})
 	jsonOut(w, 200, map[string]bool{"ok": true})
 }
-func (s *Server) inviteAttempt(key string, max int) bool {
-	s.auth.mu.Lock()
-	defer s.auth.mu.Unlock()
-	now := time.Now()
-	s.auth.clean(now)
-	lim := s.auth.attempts[key]
-	if lim.Count >= max && now.Before(lim.Until) {
-		return false
-	}
-	if lim.Until.IsZero() {
-		lim.Until = now.Add(time.Minute)
-	}
-	lim.Count++
-	s.auth.attempts[key] = lim
-	return true
+func (s *Server) inviteAttempt(key string, maximum int) bool {
+	allowed, err := s.authRateLimit(context.Background(), key, maximum, time.Minute)
+	return err == nil && allowed
 }
 func findInvite(st State, token string) (state.Invite, bool) {
+	return findInviteAt(st, token, time.Now())
+}
+func findInviteAt(st State, token string, now time.Time) (state.Invite, bool) {
 	if len(token) != 48 {
 		return state.Invite{}, false
 	}
 	hash := digest(token)
 	for _, v := range st.Invites {
-		if constantEqual(v.TokenHash, hash) && time.Now().Before(v.ExpiresAt) {
+		if constantEqual(v.TokenHash, hash) && now.Before(v.ExpiresAt) {
 			return v, true
 		}
 	}
@@ -191,8 +183,9 @@ func (s *Server) acceptInvite(w http.ResponseWriter, r *http.Request) {
 	unlock := s.lockMutation(r)
 	defer unlock()
 	var member User
-	err = s.store.update(func(st *State) error {
-		invite, ok := findInvite(*st, body.Token)
+	now := time.Now()
+	mutate := func(st *State) error {
+		invite, ok := findInviteAt(*st, body.Token, now)
 		if !ok {
 			return fmt.Errorf("invitation invalid or expired")
 		}
@@ -212,12 +205,20 @@ func (s *Server) acceptInvite(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		return nil
-	})
+	}
+	if s.auth.shared != nil {
+		err = s.auth.shared.UpdateAuthenticated(r.Context(), func(_ State, _ state.AuthData, dbNow time.Time) error { now = dbNow; return nil }, mutate)
+	} else {
+		err = s.store.update(mutate)
+	}
+
 	if err != nil {
 		fail(w, 404, "invitation invalid or expired")
 		return
 	}
-	s.issueSession(w, member, time.Now().Add(12*time.Hour), sessionMetadata(r, "password", "", "", ""))
+	if !s.issueSession(w, member, time.Now().Add(12*time.Hour), sessionMetadata(r, "password", "", "", "")) {
+		return
+	}
 	s.audit("invitation_accepted", member.Username, "", member.ID)
 	jsonOut(w, 201, publicUser(member))
 }

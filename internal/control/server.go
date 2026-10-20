@@ -26,6 +26,7 @@ import (
 )
 
 type Server struct {
+	nodeID           string
 	storageFenced    atomic.Bool
 	identitySync     *keycloakSync
 	history          *historyStore
@@ -61,13 +62,26 @@ type Server struct {
 }
 
 func New(c config.Server, password string) (*Server, error) {
+	return newServer(c, password, nil)
+}
+
+// Repository injection is private: production keeps the exclusive runtime lease
+// until distributed agent ownership and routing are implemented.
+func newServer(c config.Server, password string, repository state.Repository) (*Server, error) {
 	if err := c.Validate(); err != nil {
 		return nil, err
 	}
 	if err := state.CheckOperationsRestore(c.DataDir); err != nil {
 		return nil, err
 	}
-	st, err := openStore(c.DataDir, c.Storage, c.AdminUsername, password)
+	var st *Store
+	var err error
+	if repository == nil {
+		st, err = openStore(c.DataDir, c.Storage, c.AdminUsername, password)
+	} else {
+		err = os.MkdirAll(c.DataDir, 0700)
+		st = &Store{repository}
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -122,6 +136,11 @@ func New(c config.Server, password string) (*Server, error) {
 		return nil, fmt.Errorf("TUNNEL_METRICS_TOKEN must contain at least 32 bytes")
 	}
 	if err := s.configureOIDC(); err != nil {
+		af.Close()
+		_ = st.Close()
+		return nil, err
+	}
+	if err := s.configureSharedAuth(); err != nil {
 		af.Close()
 		_ = st.Close()
 		return nil, err
@@ -497,7 +516,7 @@ func (s *Server) createSite(w http.ResponseWriter, r *http.Request, u User) {
 	}
 	token := randomID()
 	site := Site{OrganizationID: org, ID: randomID()[:16], Name: b.Name, TokenHash: digest(token), CreatedAt: time.Now().UTC()}
-	if err := s.store.update(func(st *State) error { st.Sites = append(st.Sites, site); return nil }); err != nil {
+	if err := s.updateAuthorized(r, u, func(st *State) error { st.Sites = append(st.Sites, site); return nil }); err != nil {
 		fail(w, 500, "could not save site")
 		return
 	}
@@ -511,7 +530,7 @@ func (s *Server) deleteSite(w http.ResponseWriter, r *http.Request, u User) {
 	oldServices := s.store.snapshot().Services
 	id := r.PathValue("id")
 	removed, _ := s.store.site(id)
-	err := s.store.update(func(st *State) error {
+	err := s.updateAuthorized(r, u, func(st *State) error {
 		for i, v := range st.Sites {
 			if v.ID == id && canManage(u, v.OrganizationID, "sites:manage") {
 				st.Sites = append(st.Sites[:i], st.Sites[i+1:]...)
@@ -565,7 +584,7 @@ func (s *Server) rotateSite(w http.ResponseWriter, r *http.Request, u User) {
 	defer unlock()
 	id := r.PathValue("id")
 	token := randomID()
-	err := s.store.update(func(st *State) error {
+	err := s.updateAuthorized(r, u, func(st *State) error {
 		for i, v := range st.Sites {
 			if v.ID == id && canManage(u, v.OrganizationID, "sites:manage") {
 				st.Sites[i].TokenHash = digest(token)
@@ -639,7 +658,7 @@ func (s *Server) createService(w http.ResponseWriter, r *http.Request, u User) {
 		return
 	}
 	svc := Service{ConnectionMode: b.ConnectionMode, HealthPath: b.HealthPath, HealthMethod: b.HealthMethod, HealthExpectedStatus: b.HealthExpectedStatus, CustomDomain: b.CustomDomain, ID: randomID()[:16], Name: b.Name, SiteID: b.SiteID, URL: target.String()}
-	err = s.store.update(func(st *State) error {
+	err = s.updateAuthorized(r, u, func(st *State) error {
 		for _, site := range st.Sites {
 			if site.ID == b.SiteID && canManage(u, site.OrganizationID, "applications:manage") {
 				svc.OrganizationID = site.OrganizationID
@@ -661,7 +680,7 @@ func (s *Server) deleteService(w http.ResponseWriter, r *http.Request, u User) {
 	defer unlock()
 	id := r.PathValue("id")
 	removed, _ := s.store.service(id)
-	err := s.store.update(func(st *State) error {
+	err := s.updateAuthorized(r, u, func(st *State) error {
 		for i, v := range st.Services {
 			if v.ID == id && canManage(u, v.OrganizationID, "applications:manage") {
 				st.Services = append(st.Services[:i], st.Services[i+1:]...)
@@ -757,7 +776,7 @@ func (s *Server) createUser(w http.ResponseWriter, r *http.Request, u User) {
 		return
 	}
 	user := User{OrganizationID: org, ID: randomID()[:16], Username: b.Username, PasswordHash: hash, Identity: identity, Role: "viewer", SiteIDs: b.SiteIDs, ServiceIDs: b.ServiceIDs}
-	err := s.store.update(func(st *State) error {
+	err := s.updateAuthorized(r, u, func(st *State) error {
 		for _, v := range st.Users {
 			if v.Username == user.Username {
 				return fmt.Errorf("username exists")
@@ -785,7 +804,7 @@ func (s *Server) deleteUser(w http.ResponseWriter, r *http.Request, u User) {
 		fail(w, 400, "cannot delete yourself")
 		return
 	}
-	err := s.store.update(func(st *State) error {
+	err := s.updateAuthorized(r, u, func(st *State) error {
 		for i, v := range st.Users {
 			if v.ID == id && v.Role != "admin" && canManageMember(u, v) {
 				st.Users = append(st.Users[:i], st.Users[i+1:]...)

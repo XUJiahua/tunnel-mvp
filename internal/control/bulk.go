@@ -31,7 +31,7 @@ func (s *Server) bulkCreate(w http.ResponseWriter, r *http.Request, actor User) 
 		return
 	}
 	out := []Service{}
-	err := s.store.update(func(st *State) error {
+	err := s.updateAuthorized(r, actor, func(st *State) error {
 		for _, in := range body.Services {
 			in.Name = strings.TrimSpace(in.Name)
 			if in.Name == "" || len(in.Name) > 100 {
@@ -96,7 +96,7 @@ func (s *Server) bulkServices(w http.ResponseWriter, r *http.Request, actor User
 		return
 	}
 	changed := []Service{}
-	err := s.store.update(func(st *State) error {
+	err := s.updateAuthorized(r, actor, func(st *State) error {
 		var destination Site
 		found := false
 		if move {

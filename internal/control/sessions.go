@@ -1,12 +1,17 @@
 package control
 
 import (
+	"context"
+	"errors"
+	"github.com/XUJiahua/tunnel-mvp/internal/state"
 	"net"
 	"net/http"
 	"sort"
 	"strings"
 	"time"
 )
+
+var errSessionNotFound = errors.New("session not found")
 
 type sessionInfo struct {
 	ID        string    `json:"id"`
@@ -36,14 +41,23 @@ func sessionMetadata(r *http.Request, method, issuer, subject, sid string) sessi
 func (s *Server) listSessions(w http.ResponseWriter, r *http.Request, actor User) {
 	_, current, _ := s.currentUser(r)
 	users := map[string]string{}
-	for _, u := range s.store.snapshot().Users {
-		users[u.ID] = u.Username
-	}
 	all := r.URL.Path == "/api/sessions"
 	out := []sessionInfo{}
-	s.auth.mu.Lock()
-	s.auth.clean(time.Now())
-	for key, session := range s.auth.sessions {
+	snapshot, err := s.authSnapshot(r.Context(), true)
+	if err != nil {
+		fail(w, 503, "session storage unavailable")
+		return
+	}
+	if s.auth.shared != nil {
+		if err = s.validateAuthActor(snapshot.State, snapshot.Data, snapshot.Now, current, actor); err != nil {
+			fail(w, 401, "authentication changed; reload")
+			return
+		}
+	}
+	for _, u := range snapshot.State.Users {
+		users[u.ID] = u.Username
+	}
+	for key, session := range snapshot.Data.Sessions {
 		if !all && session.UserID != actor.ID {
 			continue
 		}
@@ -52,19 +66,19 @@ func (s *Server) listSessions(w http.ResponseWriter, r *http.Request, actor User
 		}
 		out = append(out, sessionInfo{session.ID, session.UserID, users[session.UserID], session.Method, session.CreatedAt, session.LastSeen, session.Expires, session.UserAgent, session.RemoteIP, key == current})
 	}
-	s.auth.mu.Unlock()
 	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
 	jsonOut(w, 200, out)
 }
-func (s *Server) revokeSessionKeys(keys map[string]bool) {
-	s.auth.mu.Lock()
-	for key := range keys {
-		delete(s.auth.sessions, key)
-	}
-	s.auth.clean(time.Now())
-	s.auth.mu.Unlock()
+func (s *Server) revokeSessionKeys(keys map[string]bool) error {
+	err := s.authUpdate(context.Background(), false, func(a *state.AuthData, _ State, _ time.Time) error {
+		for key := range keys {
+			delete(a.Sessions, key)
+		}
+		return nil
+	})
 	s.pruneSessionPools()
 	s.cancelRequests(func(req liveRequest) bool { return keys[req.sessionKey] })
+	return err
 }
 func (s *Server) deleteSession(w http.ResponseWriter, r *http.Request, actor User) {
 	unlock := s.lockMutation(r)
@@ -80,19 +94,29 @@ func (s *Server) deleteSession(w http.ResponseWriter, r *http.Request, actor Use
 		return
 	}
 	target, owner := "", ""
-	s.auth.mu.Lock()
-	for key, value := range s.auth.sessions {
-		if value.ID == r.PathValue("id") && (adminPath || value.UserID == actor.ID) {
-			target, owner = key, value.UserID
-			break
+	err := s.authUpdateAuthorized(r, actor, func(a *state.AuthData, _ State, _ time.Time) error {
+		for key, value := range a.Sessions {
+			if value.ID == r.PathValue("id") && (adminPath || value.UserID == actor.ID) {
+				target, owner = key, value.UserID
+				break
+			}
 		}
-	}
-	s.auth.mu.Unlock()
-	if target == "" {
-		fail(w, 404, "session not found")
+		if target == "" {
+			return errSessionNotFound
+		}
+		delete(a.Sessions, target)
+		return nil
+	})
+	if err != nil {
+		if errors.Is(err, errSessionNotFound) {
+			fail(w, 404, "session not found")
+		} else {
+			fail(w, 401, "authentication changed; reload")
+		}
 		return
 	}
-	s.revokeSessionKeys(map[string]bool{target: true})
+	s.pruneSessionPools()
+	s.cancelRequests(func(req liveRequest) bool { return req.sessionKey == target })
 	if target == current {
 		s.clearConsoleCookie(w)
 	}

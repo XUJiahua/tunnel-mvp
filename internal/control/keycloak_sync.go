@@ -197,6 +197,11 @@ func (k *keycloakSync) check(ctx context.Context, u User) syncResult {
 		flight.result = syncResult{err: ctx.Err()}
 		return flight.result
 	}
+	if k.server.auth.shared != nil {
+		result := k.checkShared(ctx, u)
+		flight.result = result
+		return result
+	}
 	result := k.fetch(ctx, u)
 	verified := time.Now()
 	k.server.stats.identitySyncChecks.Add(1)
@@ -233,6 +238,10 @@ func (s *Server) identitySessionAllowed(sess session) bool {
 	if s.identitySync == nil || sess.Method != "oidc" {
 		return true
 	}
+	if s.auth.shared != nil {
+		status, found, now, err := s.auth.shared.AuthIdentityRead(context.Background(), sess.UserID)
+		return err == nil && found && sess.IdentityEpoch != "" && state.AuthIdentityAllowed(status, sess, now)
+	}
 	k := s.identitySync
 	k.mu.Lock()
 	record, ok := k.records[sess.UserID]
@@ -242,31 +251,39 @@ func (s *Server) identitySessionAllowed(sess session) bool {
 
 // Caller holds accessMu. Local password sessions remain independent recovery credentials.
 func (s *Server) revokeIdentitySessions(userID, reason string) {
+	snapshot, err := s.authSnapshot(context.Background(), false)
+	if err != nil {
+		return
+	}
 	keys := map[string]bool{}
-	s.auth.mu.Lock()
-	for key, sess := range s.auth.sessions {
+	for key, sess := range snapshot.Data.Sessions {
 		if sess.UserID == userID && sess.Method == "oidc" {
 			keys[key] = true
 		}
 	}
-	s.auth.mu.Unlock()
 	s.revokeIdentityKeys(keys, reason)
 }
 func (s *Server) revokeIdentityKeys(keys map[string]bool, reason string) {
 	if len(keys) == 0 {
 		return
 	}
-	s.auth.mu.Lock()
 	actual := map[string]bool{}
 	counts := map[string]int{}
-	for key := range keys {
-		if sess, ok := s.auth.sessions[key]; ok && sess.Method == "oidc" {
-			actual[key] = true
-			counts[sess.UserID]++
+	err := s.authUpdate(context.Background(), false, func(a *state.AuthData, _ State, _ time.Time) error {
+		for key := range keys {
+			if sess, ok := a.Sessions[key]; ok && sess.Method == "oidc" {
+				actual[key] = true
+				counts[sess.UserID]++
+				delete(a.Sessions, key)
+			}
 		}
+		return nil
+	})
+	s.cancelRequests(func(r liveRequest) bool { return keys[r.sessionKey] })
+	s.pruneSessionPools()
+	if err != nil {
+		return
 	}
-	s.auth.mu.Unlock()
-	s.revokeSessionKeys(actual)
 	s.stats.identitySyncRevocations.Add(uint64(len(actual)))
 	for user, count := range counts {
 		u, _ := s.store.user(user)
@@ -276,12 +293,11 @@ func (s *Server) revokeIdentityKeys(keys map[string]bool, reason string) {
 func (k *keycloakSync) expire() {
 	s := k.server
 	keys := map[string]bool{}
-	s.auth.mu.Lock()
-	sessions := make(map[string]session, len(s.auth.sessions))
-	for key, sess := range s.auth.sessions {
-		sessions[key] = sess
+	snapshot, err := s.authSnapshot(context.Background(), false)
+	if err != nil {
+		return
 	}
-	s.auth.mu.Unlock()
+	sessions := snapshot.Data.Sessions
 	for key, sess := range sessions {
 		if sess.Method == "oidc" && !s.identitySessionAllowed(sess) {
 			keys[key] = true
@@ -298,13 +314,15 @@ func (k *keycloakSync) expire() {
 func (k *keycloakSync) poll(ctx context.Context) {
 	s := k.server
 	active := map[string]bool{}
-	s.auth.mu.Lock()
-	for _, sess := range s.auth.sessions {
-		if sess.Method == "oidc" && sess.Issuer == k.issuer && time.Now().Before(sess.Expires) {
+	snapshot, err := s.authSnapshot(ctx, false)
+	if err != nil {
+		return
+	}
+	for _, sess := range snapshot.Data.Sessions {
+		if sess.Method == "oidc" && sess.Issuer == k.issuer && snapshot.Now.Before(sess.Expires) {
 			active[sess.UserID] = true
 		}
 	}
-	s.auth.mu.Unlock()
 	jobs := make(chan User)
 	var wg sync.WaitGroup
 	for range 4 {

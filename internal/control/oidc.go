@@ -2,11 +2,11 @@ package control
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/XUJiahua/tunnel-mvp/internal/state"
@@ -16,19 +16,12 @@ import (
 
 const oidcCookie = "tunnel_oidc"
 
-type oidcAttempt struct {
-	browser, nonce, verifier string
-	expires, started         time.Time
-}
+type oidcAttempt = state.AuthOIDCAttempt
 type oidcLogin struct {
-	config       oauth2.Config
-	verifier     *oidc.IDTokenVerifier
-	client       *http.Client
-	endSession   string
-	mu           sync.Mutex
-	pending      map[string]oidcAttempt
-	logoutReplay map[string]time.Time
-	logoutCutoff map[string]time.Time
+	config     oauth2.Config
+	verifier   *oidc.IDTokenVerifier
+	client     *http.Client
+	endSession string
 }
 
 func (s *Server) configureOIDC() error {
@@ -73,7 +66,7 @@ func (s *Server) configureOIDC() error {
 	}
 	// Confidential clients use client_secret_basic; tokens never reach the browser.
 	endpoint.AuthStyle = oauth2.AuthStyleInHeader
-	s.oidc = &oidcLogin{config: oauth2.Config{ClientID: s.cfg.OIDC.ClientID, ClientSecret: secret, Endpoint: endpoint, RedirectURL: s.cfg.PublicURL + "/auth/oidc/callback", Scopes: []string{oidc.ScopeOpenID}}, verifier: provider.VerifierContext(base, &oidc.Config{ClientID: s.cfg.OIDC.ClientID}), client: client, endSession: metadata.EndSession, pending: map[string]oidcAttempt{}, logoutReplay: map[string]time.Time{}, logoutCutoff: map[string]time.Time{}}
+	s.oidc = &oidcLogin{config: oauth2.Config{ClientID: s.cfg.OIDC.ClientID, ClientSecret: secret, Endpoint: endpoint, RedirectURL: s.cfg.PublicURL + "/auth/oidc/callback", Scopes: []string{oidc.ScopeOpenID}}, verifier: provider.VerifierContext(base, &oidc.Config{ClientID: s.cfg.OIDC.ClientID}), client: client, endSession: metadata.EndSession}
 	return s.configureKeycloakSync()
 }
 func (s *Server) authOptions(w http.ResponseWriter, r *http.Request) {
@@ -85,24 +78,27 @@ func (s *Server) beginOIDC(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	now := time.Now()
 	token, browser := randomID(), randomID()
-	attempt := oidcAttempt{browser: digest(browser), nonce: randomID(), verifier: oauth2.GenerateVerifier(), expires: now.Add(5 * time.Minute), started: now}
-	s.oidc.mu.Lock()
-	for key, value := range s.oidc.pending {
-		if !now.Before(value.expires) {
-			delete(s.oidc.pending, key)
+	attempt := oidcAttempt{Browser: digest(browser), Nonce: randomID(), Verifier: oauth2.GenerateVerifier(), Issuer: s.cfg.OIDC.Issuer, ClientID: s.cfg.OIDC.ClientID, RedirectURI: s.cfg.PublicURL + "/auth/oidc/callback"}
+	err := s.authUpdate(r.Context(), false, func(a *state.AuthData, _ State, now time.Time) error {
+		if len(a.Pending) >= 256 {
+			return state.ErrAuthCapacity
 		}
-	}
-	if len(s.oidc.pending) >= 256 {
-		s.oidc.mu.Unlock()
-		fail(w, 429, "too many pending logins; retry in five minutes")
+		attempt.Started = now
+		attempt.Expires = now.Add(5 * time.Minute)
+		a.Pending[digest(token)] = attempt
+		return nil
+	})
+	if err != nil {
+		if errors.Is(err, state.ErrAuthCapacity) {
+			fail(w, 429, "too many pending logins; retry in five minutes")
+		} else {
+			fail(w, 503, "authentication storage unavailable")
+		}
 		return
 	}
-	s.oidc.pending[digest(token)] = attempt
-	s.oidc.mu.Unlock()
 	http.SetCookie(w, &http.Cookie{Name: oidcCookie, Value: browser, Path: "/auth/oidc", HttpOnly: true, Secure: s.secure, SameSite: http.SameSiteLaxMode, MaxAge: 300})
-	options := []oauth2.AuthCodeOption{oidc.Nonce(attempt.nonce), oauth2.S256ChallengeOption(attempt.verifier)}
+	options := []oauth2.AuthCodeOption{oidc.Nonce(attempt.Nonce), oauth2.S256ChallengeOption(attempt.Verifier)}
 	if len(s.cfg.OIDC.RequiredACR) > 0 {
 		options = append(options, oauth2.SetAuthURLParam("acr_values", strings.Join(s.cfg.OIDC.RequiredACR, " ")))
 	}
@@ -128,15 +124,17 @@ func (s *Server) callbackOIDC(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	key := digest(r.URL.Query().Get("state"))
-	s.oidc.mu.Lock()
-	attempt, ok := s.oidc.pending[key]
-	if ok && constantEqual(attempt.browser, digest(cookie.Value)) {
-		delete(s.oidc.pending, key)
-	} else {
-		ok = false
-	}
-	s.oidc.mu.Unlock()
-	if !ok || !time.Now().Before(attempt.expires) {
+	var attempt oidcAttempt
+	err = s.authUpdate(r.Context(), false, func(a *state.AuthData, _ State, now time.Time) error {
+		candidate, found := a.Pending[key]
+		if !found || !constantEqual(candidate.Browser, digest(cookie.Value)) || !now.Before(candidate.Expires) || candidate.Issuer != s.cfg.OIDC.Issuer || candidate.ClientID != s.cfg.OIDC.ClientID || candidate.RedirectURI != s.cfg.PublicURL+"/auth/oidc/callback" {
+			return state.ErrAuthChanged
+		}
+		delete(a.Pending, key)
+		attempt = candidate
+		return nil
+	})
+	if err != nil {
 		s.oidcFailed(w, r)
 		return
 	}
@@ -147,7 +145,7 @@ func (s *Server) callbackOIDC(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(oidc.ClientContext(r.Context(), s.oidc.client), 10*time.Second)
 	defer cancel()
-	token, err := s.oidc.config.Exchange(ctx, r.URL.Query().Get("code"), oauth2.VerifierOption(attempt.verifier))
+	token, err := s.oidc.config.Exchange(ctx, r.URL.Query().Get("code"), oauth2.VerifierOption(attempt.Verifier))
 	if err != nil {
 		s.oidcFailed(w, r, "code_exchange")
 		return
@@ -158,7 +156,7 @@ func (s *Server) callbackOIDC(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id, err := s.oidc.verifier.Verify(ctx, raw)
-	if err != nil || !constantEqual(id.Nonce, attempt.nonce) || state.ValidateIdentity(state.Identity{Issuer: id.Issuer, Subject: id.Subject}) != nil {
+	if err != nil || !constantEqual(id.Nonce, attempt.Nonce) || state.ValidateIdentity(state.Identity{Issuer: id.Issuer, Subject: id.Subject}) != nil {
 		s.oidcFailed(w, r, "id_token")
 		return
 	}
@@ -196,21 +194,9 @@ func (s *Server) callbackOIDC(w http.ResponseWriter, r *http.Request) {
 	// used by mutation/revocation. A concurrent disable/rebind cannot mint a session.
 	unlock := s.lockMutation(r)
 	defer unlock()
-	s.oidc.mu.Lock()
-	blocked := false
-	for _, key := range []string{"sid:" + claims.SID, "sub:" + id.Subject} {
-		if cutoff, ok := s.oidc.logoutCutoff[key]; ok && !attempt.started.After(cutoff) {
-			blocked = true
-		}
-	}
-	s.oidc.mu.Unlock()
-	if blocked {
-		s.oidcFailed(w, r)
-		return
-	}
 	for _, u := range s.store.identityUsers(id.Issuer, id.Subject) {
 		if !u.Disabled && u.Identity != nil && u.Identity.Issuer == id.Issuer && u.Identity.Subject == id.Subject {
-			if !s.identitySessionAllowed(session{UserID: u.ID, Method: "oidc", Issuer: id.Issuer, Subject: id.Subject}) {
+			if s.auth.shared == nil && !s.identitySessionAllowed(session{UserID: u.ID, Method: "oidc", Issuer: id.Issuer, Subject: id.Subject}) {
 				break
 			}
 			expires := time.Now().Add(time.Duration(s.cfg.OIDC.SessionMinutes) * time.Minute)
@@ -220,7 +206,9 @@ func (s *Server) callbackOIDC(w http.ResponseWriter, r *http.Request) {
 			if !time.Now().Before(expires) {
 				break
 			}
-			s.issueSession(w, u, expires, sessionMetadata(r, "oidc", id.Issuer, id.Subject, claims.SID))
+			if !s.issueSession(w, u, expires, sessionMetadata(r, "oidc", id.Issuer, id.Subject, claims.SID), attempt.Started) {
+				return
+			}
 			s.audit("oidc_login", u.Username, "", u.ID)
 			http.Redirect(w, r, s.cfg.PublicURL+"/", http.StatusSeeOther)
 			return

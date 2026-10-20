@@ -13,15 +13,16 @@ import (
 // DirectoryFilter is supplied by the trusted control plane, never decoded from
 // request parameters. Global bypasses organization scoping for the root admin.
 type DirectoryFilter struct {
-	ActorID        string
-	Global         bool
-	OrganizationID string
-	ExcludeAdmins  bool
-	All            bool
-	AllServices    bool
-	MemberID       string
-	SiteIDs        []string
-	ServiceIDs     []string
+	ExpectedRevision *uint64 `json:"-"`
+	ActorID          string
+	Global           bool
+	OrganizationID   string
+	ExcludeAdmins    bool
+	All              bool
+	AllServices      bool
+	MemberID         string
+	SiteIDs          []string
+	ServiceIDs       []string
 }
 type DirectoryQuery struct {
 	Kind   string

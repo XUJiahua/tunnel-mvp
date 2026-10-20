@@ -2,6 +2,7 @@ package control
 
 import (
 	"encoding/json"
+	"github.com/XUJiahua/tunnel-mvp/internal/state"
 	"mime"
 	"net/http"
 	"net/url"
@@ -55,57 +56,48 @@ func (s *Server) backchannelLogout(w http.ResponseWriter, r *http.Request) {
 	// Serialize revocation with callback session issuance and proxy registration.
 	unlock := s.lockMutation(r)
 	defer unlock()
-	s.oidc.mu.Lock()
-	for key, expires := range s.oidc.logoutReplay {
-		if !now.Before(expires) {
-			delete(s.oidc.logoutReplay, key)
-		}
-	}
-	replayKey := digest(id.Issuer + "\x00" + claims.JTI)
-	if _, seen := s.oidc.logoutReplay[replayKey]; seen {
-		s.oidc.mu.Unlock()
-		jsonOut(w, 200, map[string]bool{"ok": true})
-		return
-	}
-	if len(s.oidc.logoutReplay) >= 4096 {
-		s.oidc.mu.Unlock()
-		fail(w, 503, "logout replay window is full; retry later")
-		return
-	}
-	// Retain the JTI through the maximum accepted iat window, not just exp: the
-	// same signed token cannot log out a later session after a clock skew.
-	s.oidc.logoutReplay[replayKey] = issued.Add(5*time.Minute + 30*time.Second)
-	for key, cutoff := range s.oidc.logoutCutoff {
-		if cutoff.Before(now.Add(-5 * time.Minute)) {
-			delete(s.oidc.logoutCutoff, key)
-		}
-	}
-	if s.oidc.logoutCutoff == nil {
-		s.oidc.logoutCutoff = map[string]time.Time{}
-	}
-	if claims.SID != "" {
-		s.oidc.logoutCutoff["sid:"+claims.SID] = now
-	} else {
-		s.oidc.logoutCutoff["sub:"+id.Subject] = now
-	}
-	s.oidc.mu.Unlock()
+	revoked := 0
 	keys := map[string]bool{}
-	s.auth.mu.Lock()
-	for key, value := range s.auth.sessions {
-		if value.Method != "oidc" || value.Issuer != id.Issuer {
-			continue
+	err = s.authUpdate(r.Context(), false, func(a *state.AuthData, _ State, now time.Time) error {
+		if issued.After(now.Add(30*time.Second)) || issued.Before(now.Add(-5*time.Minute)) {
+			return state.ErrAuthChanged
 		}
-		if claims.SID != "" && value.SID != claims.SID {
-			continue
+		replayKey := digest(id.Issuer + "\x00" + claims.JTI)
+		if _, seen := a.Replay[replayKey]; seen {
+			return nil
 		}
-		if id.Subject != "" && value.Subject != id.Subject {
-			continue
+		if len(a.Replay) >= 4096 || len(a.Cutoff) >= 4096 {
+			return state.ErrAuthCapacity
 		}
-		keys[key] = true
+		a.Replay[replayKey] = issued.Add(5*time.Minute + 30*time.Second)
+		if claims.SID != "" {
+			a.Cutoff["sid:"+claims.SID] = now
+		} else {
+			a.Cutoff["sub:"+id.Subject] = now
+		}
+		for key, value := range a.Sessions {
+			if value.Method != "oidc" || value.Issuer != id.Issuer {
+				continue
+			}
+			if claims.SID != "" && value.SID != claims.SID {
+				continue
+			}
+			if id.Subject != "" && value.Subject != id.Subject {
+				continue
+			}
+			delete(a.Sessions, key)
+			keys[key] = true
+			revoked++
+		}
+		return nil
+	})
+	if err != nil {
+		fail(w, 503, "logout state unavailable; retry later")
+		return
 	}
-	s.auth.mu.Unlock()
-	s.revokeSessionKeys(keys)
-	s.audit("oidc_backchannel_logout", "", "", "", map[string]any{"sessions": len(keys)})
+	s.pruneSessionPools()
+	s.cancelRequests(func(req liveRequest) bool { return keys[req.sessionKey] })
+	s.audit("oidc_backchannel_logout", "", "", "", map[string]any{"sessions": revoked})
 	jsonOut(w, 200, map[string]bool{"ok": true})
 }
 
@@ -120,16 +112,21 @@ func (s *Server) logoutIdentity(w http.ResponseWriter, r *http.Request, actor Us
 		fail(w, 401, "sign in required")
 		return
 	}
-	s.auth.mu.Lock()
-	sess := s.auth.sessions[key]
-	s.auth.mu.Unlock()
+	sess, found, err := s.authSession(r.Context(), key)
+	if err != nil || !found {
+		fail(w, 503, "session storage unavailable")
+		return
+	}
 	if s.oidc == nil || s.oidc.endSession == "" || sess.Method != "oidc" {
 		fail(w, 400, "OIDC logout is unavailable for this session")
 		return
 	}
 	target, _ := url.Parse(s.oidc.endSession)
 	target.RawQuery = url.Values{"client_id": {s.cfg.OIDC.ClientID}, "post_logout_redirect_uri": {s.cfg.PublicURL + "/"}}.Encode()
-	s.revokeSessionKeys(map[string]bool{key: true})
+	if err := s.revokeSessionKeys(map[string]bool{key: true}); err != nil {
+		fail(w, 503, "session revocation unavailable")
+		return
+	}
 	s.clearConsoleCookie(w)
 	s.audit("oidc_logout_initiated", actor.Username, "", actor.ID)
 	jsonOut(w, 200, map[string]string{"url": target.String()})

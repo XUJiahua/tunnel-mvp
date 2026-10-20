@@ -26,6 +26,11 @@ func authRecords(data AuthData) (map[string]authRecord, error) {
 		out[kind+"\x00"+key] = authRecord{kind, key, raw, expires.UTC().Truncate(time.Microsecond)}
 		return nil
 	}
+	for k, v := range data.Identities {
+		if e := add("identity", k, v, v.RetainUntil); e != nil {
+			return nil, e
+		}
+	}
 	for k, v := range data.Sessions {
 		if e := add("session", k, v, v.Expires); e != nil {
 			return nil, e
@@ -67,6 +72,13 @@ func authRecords(data AuthData) (map[string]authRecord, error) {
 func authDecode(data *AuthData, record authRecord) error {
 	var expires time.Time
 	switch record.Kind {
+	case "identity":
+		var v AuthIdentityStatus
+		if err := decodeStrict(record.Payload, &v); err != nil {
+			return err
+		}
+		data.Identities[record.Key] = v
+		expires = v.RetainUntil
 	case "session":
 		var v AuthSession
 		if err := decodeStrict(record.Payload, &v); err != nil {
@@ -169,6 +181,10 @@ func pgAuthNow(ctx context.Context, tx *sql.Tx) (time.Time, error) {
 	return now, err
 }
 func pgAuthCleanup(ctx context.Context, tx *sql.Tx, now time.Time) error {
+	// A bridge proof epoch can never resurrect an old session after expiry.
+	if _, err := tx.ExecContext(ctx, `DELETE FROM tunnel_state.auth_records s WHERE s.kind='session' AND coalesce(s.payload->>'IdentityEpoch','')<>'' AND NOT EXISTS(SELECT 1 FROM tunnel_state.auth_records i WHERE i.kind='identity' AND i.key=s.user_id AND i.payload->>'Epoch'=s.payload->>'IdentityEpoch' AND (i.payload->>'Enabled')::boolean AND (i.payload->>'ValidUntil')::timestamptz>$1)`, now); err != nil {
+		return err
+	}
 	// Remove grants before their expired parent; the FK remains enabled/deferred.
 	_, err := tx.ExecContext(ctx, `DELETE FROM tunnel_state.auth_records g WHERE g.kind IN ('ticket','access') AND (g.expires_at<=$1 OR NOT EXISTS(SELECT 1 FROM tunnel_state.auth_records s WHERE s.kind='session' AND s.key=g.parent_key AND s.expires_at>$1))`, now)
 	if err != nil {
@@ -178,14 +194,17 @@ func pgAuthCleanup(ctx context.Context, tx *sql.Tx, now time.Time) error {
 	return err
 }
 func pgAuthEvent(ctx context.Context, tx *sql.Tx, revision uint64, kind string) error {
-	// All producers already hold meta FOR UPDATE. Event IDs therefore follow
-	// commit order; a late commit cannot appear behind an acknowledged watermark.
-	_, err := tx.ExecContext(ctx, `INSERT INTO tunnel_state.auth_outbox(revision,kind) VALUES($1,$2)`, int64(revision), kind)
+	// The meta writer lock orders allocation and commit of every event.
+	var id int64
+	if err := tx.QueryRowContext(ctx, `INSERT INTO tunnel_state.auth_outbox(revision,kind) VALUES($1,$2) RETURNING id`, int64(revision), kind).Scan(&id); err != nil {
+		return err
+	}
+	_, err := tx.ExecContext(ctx, `UPDATE tunnel_state.auth_policy SET last_event_id=$1 WHERE singleton`, id)
 	return err
 }
 func pgAuthWatermark(ctx context.Context, tx *sql.Tx) (uint64, error) {
 	var id uint64
-	err := tx.QueryRowContext(ctx, `SELECT coalesce(max(id),0) FROM tunnel_state.auth_outbox`).Scan(&id)
+	err := tx.QueryRowContext(ctx, `SELECT last_event_id FROM tunnel_state.auth_policy WHERE singleton`).Scan(&id)
 	return id, err
 }
 func (p *PostgresRepository) authPolicy(ctx context.Context, tx *sql.Tx) error {
@@ -197,6 +216,7 @@ func (p *PostgresRepository) authPolicy(ctx context.Context, tx *sql.Tx) error {
 		return err
 	}
 	if policy != p.authPolicyHash {
+		p.fence()
 		return ErrAuthPolicy
 	}
 	return nil

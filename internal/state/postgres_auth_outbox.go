@@ -25,11 +25,16 @@ func (p *PostgresRepository) AuthPoll(ctx context.Context, consumer string, limi
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
-		var first, last uint64
-		if err = tx.QueryRowContext(ctx, `SELECT coalesce(min(id),0),coalesce(max(id),0) FROM tunnel_state.auth_outbox`).Scan(&first, &last); err != nil {
+
+		var first uint64
+		if err = tx.QueryRowContext(ctx, `SELECT coalesce(min(id),0) FROM tunnel_state.auth_outbox`).Scan(&first); err != nil {
 			return err
 		}
-		out.Reset = cursor > last || first > 0 && cursor < first-1
+		last, err := pgAuthWatermark(ctx, tx)
+		if err != nil {
+			return err
+		}
+		out.Reset = cursor > last || first > 0 && cursor < first-1 || first == 0 && cursor < last
 		if out.Reset {
 			return nil
 		}
@@ -64,7 +69,7 @@ func (p *PostgresRepository) AuthAcknowledge(ctx context.Context, consumer strin
 		if cursor > watermark {
 			return fmt.Errorf("cannot acknowledge an unseen authentication event")
 		}
-		_, err = tx.ExecContext(ctx, `INSERT INTO tunnel_state.auth_consumers(id,cursor) VALUES($1,$2) ON CONFLICT(id) DO UPDATE SET cursor=greatest(tunnel_state.auth_consumers.cursor,excluded.cursor),updated_at=clock_timestamp()`, consumer, int64(cursor))
+		_, err = tx.ExecContext(ctx, `INSERT INTO tunnel_state.auth_consumers(id,cursor) VALUES($1,$2) ON CONFLICT(id) DO UPDATE SET cursor=CASE WHEN tunnel_state.auth_consumers.cursor>$3 THEN excluded.cursor ELSE greatest(tunnel_state.auth_consumers.cursor,excluded.cursor) END,updated_at=clock_timestamp()`, consumer, int64(cursor), int64(watermark))
 		return p.failed(err, false)
 	})
 }

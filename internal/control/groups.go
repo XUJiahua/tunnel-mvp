@@ -98,7 +98,7 @@ func (s *Server) saveGroup(w http.ResponseWriter, r *http.Request, actor User) {
 		return
 	}
 	out := Group{OrganizationID: org, ID: id, Name: body.Name, MemberIDs: body.MemberIDs, SiteIDs: body.SiteIDs, ServiceIDs: body.ServiceIDs}
-	err := s.store.update(func(st *State) error {
+	err := s.updateAuthorized(r, actor, func(st *State) error {
 		if err := validateGrants(st, body.SiteIDs, body.ServiceIDs); err != nil {
 			return err
 		}
@@ -147,7 +147,7 @@ func (s *Server) deleteGroup(w http.ResponseWriter, r *http.Request, actor User)
 	}
 	id := r.PathValue("id")
 	org := ""
-	err := s.store.update(func(st *State) error {
+	err := s.updateAuthorized(r, actor, func(st *State) error {
 		for i, g := range st.Groups {
 			if g.ID == id && canManage(actor, g.OrganizationID, "groups:manage") {
 				org = g.OrganizationID

@@ -22,6 +22,7 @@ type Identity struct {
 }
 
 type User struct {
+	AuthRevision   *uint64   `json:"-"`
 	OrganizationID string    `json:"organizationID,omitempty"`
 	RoleID         string    `json:"roleID,omitempty"`
 	Permissions    []string  `json:"-"`
