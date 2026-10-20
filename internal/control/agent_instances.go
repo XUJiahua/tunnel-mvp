@@ -211,7 +211,7 @@ func (s *Server) createAgent(w http.ResponseWriter, r *http.Request, u User) {
 	}
 	token := randomID()
 	a := state.AgentRegistration{ID: randomID()[:16], SiteID: siteID, Name: body.Name, TokenHash: digest(token), CreatedAt: time.Now().UTC()}
-	err := s.store.update(func(st *State) error {
+	err := s.updateAuthorized(r, u, func(st *State) error {
 		count := 0
 		for _, a := range st.Agents {
 			if a.SiteID == siteID {
@@ -270,7 +270,7 @@ func (s *Server) manageAgent(w http.ResponseWriter, r *http.Request, u User) {
 	}
 	var out state.AgentRegistration
 	disconnect := rotate || r.Method == "DELETE"
-	err := s.store.update(func(st *State) error {
+	err := s.updateAuthorized(r, u, func(st *State) error {
 		for i := range st.Agents {
 			a := &st.Agents[i]
 			if a.ID != id || a.SiteID != siteID {

@@ -1,6 +1,7 @@
 package control
 
 import (
+	"context"
 	"crypto"
 	"crypto/rand"
 	"crypto/rsa"
@@ -8,6 +9,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"github.com/XUJiahua/tunnel-mvp/internal/state"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -137,10 +139,13 @@ func oidcFixture(t *testing.T) (*fixture, *testIdP, User) {
 	t.Helper()
 	p := newTestIdP(t)
 	f := setup(t)
+	f.s.backgroundCancel()
+	f.s.backgroundWG.Wait()
 	f.s.cfg.OIDC = config.OIDC{Issuer: p.server.URL, ClientID: "console", SessionMinutes: 60}
 	if err := f.s.configureOIDC(); err != nil {
 		t.Fatal(err)
 	}
+	f.s.startBackground()
 	res, b := f.request(t, "POST", "/api/users", map[string]any{"username": "external", "oidcSubject": "subject-A"}, f.cookie, "")
 	if res.StatusCode != 201 {
 		t.Fatalf("create OIDC member: %s", b)
@@ -202,9 +207,10 @@ func TestOIDCProtocolAndMemberLifecycle(t *testing.T) {
 	if res.StatusCode != 200 || mustJSON[User](t, b).ID != u.ID || mustJSON[User](t, b).Role != "viewer" || strings.Contains(string(b), "passwordHash") || strings.Contains(string(b), "never-forward") {
 		t.Fatalf("local mapping: %s", b)
 	}
-	f.s.auth.mu.Lock()
-	sess := f.s.auth.sessions[digest(login.Value)]
-	f.s.auth.mu.Unlock()
+	sess, found, err := f.s.authSession(context.Background(), digest(login.Value))
+	if err != nil || !found {
+		t.Fatal("session missing", err)
+	}
 	access, host, _ := f.grant(t, svc, login)
 	res, b = f.request(t, "GET", "/", nil, access, host)
 	if res.StatusCode != 200 || string(b) != "OIDC application" {
@@ -279,22 +285,25 @@ func TestOIDCRejectsInvalidProtocolAndClaims(t *testing.T) {
 			p.mu.Lock()
 			p.mode = mode
 			p.mu.Unlock()
-			path, cookie, state := startFlow(t, f, p)
+			path, cookie, stateToken := startFlow(t, f, p)
 			switch mode {
 			case "missing-cookie":
 				cookie = nil
 			case "wrong-cookie":
 				cookie = &http.Cookie{Name: oidcCookie, Value: "other"}
 			case "state":
-				path = strings.ReplaceAll(path, state, strings.Repeat("a", 48))
+				path = strings.ReplaceAll(path, stateToken, strings.Repeat("a", 48))
 			case "expired-state":
-				f.s.oidc.mu.Lock()
-				attempt := f.s.oidc.pending[digest(state)]
-				attempt.expires = time.Now().Add(-time.Minute)
-				f.s.oidc.pending[digest(state)] = attempt
-				f.s.oidc.mu.Unlock()
+				if err := f.s.authUpdate(context.Background(), false, func(a *state.AuthData, _ State, now time.Time) error {
+					attempt := a.Pending[digest(stateToken)]
+					attempt.Expires = now.Add(-time.Minute)
+					a.Pending[digest(stateToken)] = attempt
+					return nil
+				}); err != nil {
+					t.Fatal(err)
+				}
 			case "denied":
-				path = "/auth/oidc/callback?state=" + state + "&error=access_denied"
+				path = "/auth/oidc/callback?state=" + stateToken + "&error=access_denied"
 			}
 			p.mu.Lock()
 			before := p.exchanges
@@ -313,11 +322,15 @@ func TestOIDCRejectsInvalidProtocolAndClaims(t *testing.T) {
 			}
 		})
 	}
-	f.s.oidc.mu.Lock()
-	for i := 0; i < 256; i++ {
-		f.s.oidc.pending[fmt.Sprint(i)] = oidcAttempt{expires: time.Now().Add(time.Minute)}
+	if err := f.s.authUpdate(context.Background(), false, func(a *state.AuthData, _ State, now time.Time) error {
+		a.Pending = map[string]state.AuthOIDCAttempt{}
+		for i := 0; i < 256; i++ {
+			a.Pending[digest(fmt.Sprint(i))] = state.AuthOIDCAttempt{Browser: digest("browser"), Nonce: "nonce", Verifier: "verifier", Issuer: f.s.cfg.OIDC.Issuer, ClientID: f.s.cfg.OIDC.ClientID, RedirectURI: f.h.URL + "/auth/oidc/callback", Started: now, Expires: now.Add(time.Minute)}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
-	f.s.oidc.mu.Unlock()
 	res, _ := f.request(t, "GET", "/auth/oidc/start", nil, nil, "")
 	if res.StatusCode != 429 {
 		t.Fatal("pending flows unbounded")

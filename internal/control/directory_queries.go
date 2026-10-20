@@ -9,7 +9,7 @@ import (
 )
 
 func directoryFilter(u User) state.DirectoryFilter {
-	return state.DirectoryFilter{ActorID: u.ID, Global: u.Role == "admin", OrganizationID: u.OrganizationID, SiteIDs: u.SiteIDs, ServiceIDs: u.ServiceIDs}
+	return state.DirectoryFilter{ExpectedRevision: u.AuthRevision, ActorID: u.ID, Global: u.Role == "admin", OrganizationID: u.OrganizationID, SiteIDs: u.SiteIDs, ServiceIDs: u.ServiceIDs}
 }
 func anyPermission(u User, permissions ...string) bool {
 	for _, p := range permissions {

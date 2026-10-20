@@ -10,7 +10,7 @@ import (
 )
 
 const Postgres = "postgres"
-const PostgresSchemaVersion = 1
+const PostgresSchemaVersion = 2
 const pgNamespace = 1414876748 // TUNL; advisory keys are scoped to this database.
 const pgRuntimeKey = 1
 const pgSchemaKey = 2
@@ -79,7 +79,7 @@ func pgCreateSchema(ctx context.Context, tx *sql.Tx) error {
 			return err
 		}
 	}
-	return nil
+	return pgCreateAuthSchema(ctx, tx)
 }
 func pgVisit(st State, kind string, visit func(int, any) bool) {
 	if kind == "agents" {

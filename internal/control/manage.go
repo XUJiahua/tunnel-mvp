@@ -31,7 +31,7 @@ func (s *Server) updateSite(w http.ResponseWriter, r *http.Request, u User) {
 	}
 	var out Site
 	closeLegacy := false
-	err := s.store.update(func(st *State) error {
+	err := s.updateAuthorized(r, u, func(st *State) error {
 		for i := range st.Sites {
 			site := &st.Sites[i]
 			if site.ID == r.PathValue("id") && canManage(u, site.OrganizationID, "sites:manage") {
@@ -85,7 +85,7 @@ func (s *Server) updateService(w http.ResponseWriter, r *http.Request, u User) {
 	var out Service
 	changed := false
 	healthChanged := false
-	err = s.store.update(func(st *State) error {
+	err = s.updateAuthorized(r, u, func(st *State) error {
 		for i := range st.Services {
 			if st.Services[i].ID == r.PathValue("id") && canManage(u, st.Services[i].OrganizationID, "applications:manage") {
 				svc := &st.Services[i]
@@ -200,7 +200,7 @@ func (s *Server) updateUser(w http.ResponseWriter, r *http.Request, actor User) 
 		body.ServiceIDs = []string{}
 	}
 	var out User
-	err := s.store.update(func(st *State) error {
+	err := s.updateAuthorized(r, actor, func(st *State) error {
 		if err := validateGrants(st, body.SiteIDs, body.ServiceIDs); err != nil {
 			return err
 		}
@@ -271,7 +271,7 @@ func (s *Server) setPassword(w http.ResponseWriter, r *http.Request, actor User,
 		fail(w, 403, "current password is incorrect")
 		return
 	}
-	err = s.store.update(func(st *State) error {
+	err = s.updateAuthorized(r, actor, func(st *State) error {
 		for i := range st.Users {
 			if st.Users[i].ID == id {
 				st.Users[i].PasswordHash = string(hash)

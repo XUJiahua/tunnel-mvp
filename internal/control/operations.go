@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/XUJiahua/tunnel-mvp/internal/state"
 	"io"
 	"log/slog"
 	"net/http"
@@ -86,15 +87,15 @@ func (s *Server) dropTransport(id string) {
 	}
 }
 func (s *Server) pruneSessionPools() {
-	s.auth.mu.Lock()
 	active := map[string]bool{}
-	now := time.Now()
-	for key, sess := range s.auth.sessions {
-		if now.Before(sess.Expires) {
-			active[key] = true
+	snapshot, err := s.authSnapshot(context.Background(), false)
+	if err == nil {
+		for key, sess := range snapshot.Data.Sessions {
+			if snapshot.Now.Before(sess.Expires) {
+				active[key] = true
+			}
 		}
 	}
-	s.auth.mu.Unlock()
 	s.poolMu.Lock()
 	defer s.poolMu.Unlock()
 	for key, p := range s.pools {
@@ -134,9 +135,7 @@ func (s *Server) startBackground() {
 			case <-ctx.Done():
 				return
 			case <-cleanup.C:
-				s.auth.mu.Lock()
-				s.auth.clean(time.Now())
-				s.auth.mu.Unlock()
+				_ = s.authUpdate(ctx, false, func(_ *state.AuthData, _ State, _ time.Time) error { return nil })
 				s.pruneSessionPools()
 			case <-tick:
 				s.probeAll(ctx)
@@ -145,6 +144,7 @@ func (s *Server) startBackground() {
 	}()
 	s.startIdentitySync(ctx)
 	s.startStorageFence(ctx)
+	s.startSharedAuth(ctx)
 }
 func (s *Server) probeAll(ctx context.Context) {
 	// Four workers bound concurrency and shutdown latency; one batch at a time.

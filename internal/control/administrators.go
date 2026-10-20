@@ -62,7 +62,7 @@ func (s *Server) manageAdministrator(w http.ResponseWriter, r *http.Request, act
 		}
 		action = "delete"
 	}
-	err := s.store.update(func(st *State) error {
+	err := s.updateAuthorized(r, actor, func(st *State) error {
 		if create {
 			st.Users = append(st.Users, out)
 			return nil

@@ -23,9 +23,9 @@ func (s *Server) startStorageFence(ctx context.Context) {
 		// those locks while waiting for the failed database connection.
 		s.cancelRequests(func(liveRequest) bool { return true })
 		s.auth.mu.Lock()
-		clear(s.auth.sessions)
-		clear(s.auth.tickets)
-		clear(s.auth.access)
+		clear(s.auth.Sessions)
+		clear(s.auth.Tickets)
+		clear(s.auth.Access)
 		s.auth.mu.Unlock()
 		s.tunnelMu.Lock()
 		s.closing = true

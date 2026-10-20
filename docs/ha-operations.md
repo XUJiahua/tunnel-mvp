@@ -1,6 +1,6 @@
 # HA 与目标环境验收手册
 
-HA-1 已增加 PostgreSQL 单活运行参数与离线恢复，见 [PostgreSQL 手册](postgres-operations.md)。当前没有多控制面集群启动参数，部署保持一个活跃控制面进程。站点可以部署多个 Agent 实例；这是 Agent 故障后的新连接容灾。不要让多个控制面共享 data 目录，不要用网络文件系统绕过 SQLite/目录锁。
+HA-1 已增加 PostgreSQL 单活运行参数与离线恢复，见 [PostgreSQL 手册](postgres-operations.md)。HA-2 已接入 [共享认证和有界撤销](design/shared-authentication.md)。当前没有多控制面集群启动参数，部署保持一个活跃控制面进程。站点可以部署多个 Agent 实例；这是 Agent 故障后的新连接容灾。不要让多个控制面共享 data 目录，不要用网络文件系统绕过 SQLite/目录锁。
 
 ## 当前可执行恢复
 

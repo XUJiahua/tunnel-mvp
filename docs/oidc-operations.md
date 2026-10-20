@@ -118,7 +118,7 @@ Keycloak 采用固定示例版本 `26.8.0`，遵循[官方容器入门](https://
 | Discovery 失败 | Issuer 精确值、realm 路径、网络、CA、端点 HTTPS 与 IdP 可用性；错误日志不会输出 secret |
 | 统一登录失败 | 本地成员是否存在/启用、Issuer/sub 是否精确匹配、client secret/redirect URI、ID Token audience/有效期和两端时钟 |
 | 多标签页登录失败 | 重新从登录页发起；同一浏览器以最新 flow Cookie 为准 |
-| Server 重启后回调失败 | pending flow 在内存中，重新发起登录 |
+| Server 重启后回调失败 | JSON/SQLite pending flow 清空；PostgreSQL 检查 flow 是否超过 5 分钟或认证策略已改变，必要时重新发起登录 |
 | 登录拥塞返回 429 | 最多 256 条 pending，5 分钟到期清理；检查 IdP 故障和重复发起请求 |
 | 专用成员无法重置密码 | 在 IdP 管理密码；本地 API 不为其创建备用密码 |
 | IdP 注销后仍能访问 | 检查 back-channel/RP 注销及 sid/sub 范围；Keycloak 禁用同步需显式配置，其他 IdP 禁用不自动等同于注销。紧急使用本地禁用 |

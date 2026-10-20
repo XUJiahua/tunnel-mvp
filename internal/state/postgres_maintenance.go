@@ -274,7 +274,7 @@ func RecoverPostgresRuntime(ctx context.Context, dir, dsn string, oldServerStopp
 	}
 	defer p.Close()
 	p.mu.Lock()
-	_, err = p.conn.ExecContext(ctx, `UPDATE tunnel_state.meta SET runtime_owner='',revision=revision+1 WHERE singleton`)
+	_, err = p.db.ExecContext(ctx, `UPDATE tunnel_state.meta SET runtime_owner='',revision=revision+1 WHERE singleton`)
 	p.mu.Unlock()
 	if err != nil {
 		return Summary{}, p.failed(err, false)

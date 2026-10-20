@@ -63,7 +63,7 @@ func (s *Server) manageAgentPolicy(w http.ResponseWriter, r *http.Request, u Use
 		fail(w, 400, err.Error())
 		return
 	}
-	err := s.store.update(func(st *State) error {
+	err := s.updateAuthorized(r, u, func(st *State) error {
 		for i := range st.Agents {
 			if st.Agents[i].ID == id && st.Agents[i].SiteID == siteID {
 				st.Agents[i].Policy = &p

@@ -1,6 +1,7 @@
 package control
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"time"
@@ -20,14 +21,72 @@ func publicUser(u User) userView {
 	u.PasswordHash = ""
 	return userView{User: u, PasswordLogin: local, Permissions: u.Permissions}
 }
-func (s *Server) issueSession(w http.ResponseWriter, u User, expires time.Time, metadata session) {
+func (s *Server) issueSession(w http.ResponseWriter, u User, expires time.Time, metadata session, started ...time.Time) bool {
 	token := randomID()
-	s.auth.mu.Lock()
-	s.auth.clean(time.Now())
-	metadata.UserID, metadata.Expires = u.ID, expires
-	s.auth.sessions[digest(token)] = metadata
-	s.auth.mu.Unlock()
+	lifetime := time.Until(expires)
+	err := s.authUpdate(context.Background(), true, func(a *state.AuthData, st State, now time.Time) error {
+		var fresh User
+		found := false
+		for _, v := range st.Users {
+			if v.ID == u.ID && !v.Disabled {
+				fresh = v
+				found = true
+				break
+			}
+		}
+		if !found {
+			return state.ErrAuthChanged
+		}
+		if metadata.Method == "password" {
+			if fresh.PasswordHash == "" || fresh.PasswordHash != u.PasswordHash {
+				return state.ErrAuthChanged
+			}
+		} else {
+			if fresh.Identity == nil || fresh.Identity.Issuer != metadata.Issuer || fresh.Identity.Subject != metadata.Subject {
+				return state.ErrAuthChanged
+			}
+			began := now
+			if len(started) > 0 {
+				began = started[0]
+			}
+			for _, key := range []string{"sid:" + metadata.SID, "sub:" + metadata.Subject} {
+				if cutoff, ok := a.Cutoff[key]; ok && !began.After(cutoff) {
+					return state.ErrAuthChanged
+				}
+			}
+			if s.identitySync != nil && s.auth.shared != nil {
+				status, ok := a.Identities[u.ID]
+				if !ok || !status.Enabled || status.Issuer != metadata.Issuer || status.Subject != metadata.Subject || !now.Before(status.ValidUntil) {
+					return state.ErrAuthChanged
+				}
+				metadata.IdentityEpoch = status.Epoch
+			}
+		}
+		if len(a.Sessions) >= 4096 {
+			return state.ErrAuthCapacity
+		}
+		if s.auth.shared != nil {
+			bounded := now.Add(lifetime)
+			if bounded.Before(expires) {
+				expires = bounded
+			}
+			metadata.CreatedAt = now
+			metadata.LastSeen = now
+		}
+		if !now.Before(expires) {
+			return state.ErrAuthChanged
+		}
+		metadata.UserID = u.ID
+		metadata.Expires = expires
+		a.Sessions[digest(token)] = metadata
+		return nil
+	})
+	if err != nil {
+		fail(w, 503, "authentication changed or unavailable; sign in again")
+		return false
+	}
 	http.SetCookie(w, &http.Cookie{Name: consoleCookie, Value: token, Path: "/", HttpOnly: true, Secure: s.secure, SameSite: http.SameSiteLaxMode, MaxAge: max(1, int(time.Until(expires).Seconds()))})
+	return true
 }
 func (s *Server) updateIdentity(w http.ResponseWriter, r *http.Request, actor User) {
 	var body struct {
@@ -81,7 +140,7 @@ func (s *Server) mutateMember(w http.ResponseWriter, r *http.Request, actor User
 		return
 	}
 	var out User
-	err := s.store.update(func(st *State) error {
+	err := s.updateAuthorized(r, actor, func(st *State) error {
 		for i := range st.Users {
 			if st.Users[i].ID == r.PathValue("id") && st.Users[i].Role != "admin" && canManageMember(actor, st.Users[i]) {
 				if err := change(&st.Users[i]); err != nil {
@@ -105,8 +164,8 @@ func (s *Server) mutateMember(w http.ResponseWriter, r *http.Request, actor User
 func (s *Server) profile(w http.ResponseWriter, r *http.Request, u User) {
 	_, key, _ := s.currentUser(r)
 	view := publicUser(u)
-	s.auth.mu.Lock()
-	view.SessionMethod = s.auth.sessions[key].Method
-	s.auth.mu.Unlock()
+	if sess, ok, err := s.authSession(r.Context(), key); err == nil && ok {
+		view.SessionMethod = sess.Method
+	}
 	jsonOut(w, 200, view)
 }

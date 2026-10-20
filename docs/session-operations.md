@@ -6,7 +6,7 @@
 
 点击“撤销会话”并确认，会立即撤销该设备控制台和应用访问并关闭其长连接。其他设备继续有效。撤销当前会话会回到登录页。成员禁用/改密/身份重新绑定仍撤销该账号的全部会话。
 
-列表只包含当前 Server 的内存会话；重启清空。最近活动时间最多每分钟更新，仅反映控制台鉴权，不是完整应用访问轨迹。
+JSON/SQLite 列表来自当前 Server 内存，重启清空；PostgreSQL 列表来自共享认证表，正常重启保留未到期会话。恢复到新库或改变认证策略要求重新登录。最近活动时间最多每分钟更新，仅反映控制台鉴权，不是完整应用访问轨迹。
 
 ## 配置 Keycloak 退出通知
 
@@ -72,3 +72,5 @@ TUNNEL_TEST_STORAGE=sqlite KEYCLOAK_HOME=/tmp/tunnel-keycloak-e2e/server pnpm ex
 测试覆盖真实 Discovery/JWKS、密码 + OTP、未绑定拒绝、本地应用授权、Agent HTTP/WS/SSE、IdP 管理员注销及通知撤销、RP 主动退出和 IdP SSO 会话终止。普通 `test:e2e` 未设置 KEYCLOAK_HOME 时该用例明确跳过；CI 另设 JSON/SQLite 两个真实 Keycloak 作业，不以跳过代替验收。
 
 CI 失败先看对应 job 的 test-results 和 Keycloak 诊断目录。不要并行运行多个 Playwright 进程共用默认 test-results；如需独立并发，给每个进程设置不同 `--output` 并避开固定端口。
+
+PostgreSQL 撤销事务提交后，新请求直接读取最新认证；已有应用流每秒重新证明，并受独立 5 秒授权租约限制。生产仍是单活 Server，跨节点 Agent 路由属于后续阶段。见 [共享认证设计](design/shared-authentication.md)。
