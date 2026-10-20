@@ -63,6 +63,11 @@ func (l *authLease) renew(until time.Time) {
 		}
 	})
 }
+func (l *authLease) valid() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return !l.stopped && l.ctx.Err() == nil && time.Now().Before(l.until)
+}
 func (l *authLease) stop() {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -111,7 +116,9 @@ func (s *Server) refreshSharedAuth(ctx context.Context) {
 		if r.accessKey != "" {
 			accesses[r.accessKey] = true
 		}
-		sessions[r.sessionKey] = true
+		if r.sessionKey != "" {
+			sessions[r.sessionKey] = true
+		}
 		services[r.serviceID] = true
 	}
 	pools := s.snapshotPools()
@@ -142,6 +149,15 @@ func (s *Server) refreshSharedAuth(ctx context.Context) {
 		targets[svc.ID] = svc
 	}
 	for _, r := range live {
+		if r.system {
+			svc, found := targets[r.serviceID]
+			if !found || !sameRoute(r.route, svc) {
+				r.cancel()
+			} else if r.lease != nil {
+				r.lease.renew(started.Add(authorizationLease))
+			}
+			continue
+		}
 		sess, exists := snapshot.Data.Sessions[r.sessionKey]
 		user, userFound := users[r.userID]
 		svc, serviceFound := targets[r.serviceID]

@@ -210,12 +210,15 @@ func (s *Server) gateway(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, release := s.trackRequest(r.Context(), u, g, digest(c.Value), resolution, proofStarted)
 	defer release()
+	if s.cluster != nil {
+		ctx = context.WithValue(ctx, clusterAuthorityKey{}, clusterAuthority{Kind: "access", SessionKey: g.SessionKey, AccessKey: digest(c.Value)})
+	}
 	r = r.WithContext(ctx)
 	target, _ := url.Parse(svc.URL)
 	upstreamOrigin := *target
 	upstreamOrigin.Path = ""
 	upstreamOrigin.RawPath = ""
-	transport := s.serviceTransport(svc, g.SessionKey)
+	transport := s.serviceTransport(svc, g.SessionKey, digest(c.Value))
 	s.accessMu.RUnlock()
 	locked = false
 	s.stats.requests.Add(1)
@@ -319,6 +322,9 @@ func (s *Server) probe(w http.ResponseWriter, r *http.Request, u User) {
 	}
 	resolution.State.Services = []Service{svc}
 	ctx, release := s.trackRequest(r.Context(), u, grant{SessionKey: key, ServiceID: svc.ID, Expires: time.Now().Add(14 * time.Second)}, "", resolution, proofStarted)
+	if s.cluster != nil {
+		ctx = context.WithValue(ctx, clusterAuthorityKey{}, clusterAuthority{Kind: "probe", SessionKey: key})
+	}
 	s.accessMu.RUnlock()
 	defer release()
 	report := s.checkService(ctx, svc)
@@ -341,7 +347,17 @@ func (s *Server) checkService(parent context.Context, svc Service) probeReport {
 	}
 	ctx, cancel := context.WithTimeout(parent, 14*time.Second)
 	defer cancel()
-	t := s.serviceTransport(svc)
+	var t *http.Transport
+	if s.cluster != nil {
+		authority, ok := ctx.Value(clusterAuthorityKey{}).(clusterAuthority)
+		if !ok {
+			authority = clusterAuthority{Kind: "system"}
+			ctx = context.WithValue(ctx, clusterAuthorityKey{}, authority)
+		}
+		t = s.serviceTransport(svc, "probe", authority.Kind+authority.SessionKey)
+	} else {
+		t = s.serviceTransport(svc)
+	}
 	client := &http.Client{Transport: t, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	req, err := http.NewRequestWithContext(ctx, func() string {
 		if svc.HealthMethod != "" {

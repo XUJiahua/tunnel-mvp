@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/XUJiahua/tunnel-mvp/internal/state"
@@ -213,7 +214,8 @@ func (s *Server) configureSharedAuth() error {
 	raw, err := json.Marshal(struct {
 		PublicURL, AccessURL string
 		OIDC                 any
-	}{s.cfg.PublicURL, s.cfg.AccessURL, s.cfg.OIDC})
+		Cluster              string `json:",omitempty"`
+	}{s.cfg.PublicURL, s.cfg.AccessURL, s.cfg.OIDC, s.clusterPolicyHash()})
 	if err != nil {
 		return err
 	}
@@ -226,6 +228,9 @@ func (s *Server) configureSharedAuth() error {
 	raw, err = os.ReadFile(path)
 	if os.IsNotExist(err) {
 		id := randomID()
+		if s.cfg.Cluster.Enabled {
+			id = s.cfg.Cluster.NodeID
+		}
 		file, e := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 		if e != nil {
 			return e
@@ -244,16 +249,20 @@ func (s *Server) configureSharedAuth() error {
 	if err != nil {
 		return err
 	}
-	id := string(raw)
-	if len(id) == 49 && id[48] == '\n' {
-		id = id[:48]
+	id := strings.TrimSpace(string(raw))
+	if s.cfg.Cluster.Enabled {
+		if id != s.cfg.Cluster.NodeID {
+			return fmt.Errorf("node.id differs from cluster.nodeID; use the matching runtime directory")
+		}
+	} else {
+		if len(id) != 48 {
+			return fmt.Errorf("invalid node.id")
+		}
+		if _, err = hex.DecodeString(id); err != nil {
+			return fmt.Errorf("invalid node.id")
+		}
 	}
-	if len(id) != 48 {
-		return fmt.Errorf("invalid node.id")
-	}
-	if _, err = hex.DecodeString(id); err != nil {
-		return fmt.Errorf("invalid node.id")
-	}
+
 	s.nodeID = id
 	return nil
 }

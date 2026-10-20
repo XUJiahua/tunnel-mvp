@@ -17,6 +17,7 @@ import (
 type agentConnection struct {
 	key, siteID, instanceID, organizationID, remoteIP, version, policyVersion string
 	connectedAt                                                               time.Time
+	generation                                                                uint64
 	cancel                                                                    context.CancelFunc
 	closing                                                                   atomic.Bool
 	channels                                                                  atomic.Int64
@@ -38,6 +39,10 @@ func (s *Store) agent(id string) (state.AgentRegistration, bool) {
 }
 func (s *Server) authenticatedTunnel(r *http.Request) (string, bool) {
 	site, ok := s.authenticatedAgent(r)
+	if s.cluster != nil {
+		key, found := r.Context().Value(clusterAgentKey{}).(string)
+		return key, ok && found
+	}
 	return agentKey(site, r.Header.Get("X-Tunnel-Instance")), ok
 }
 func (s *Server) connectedAgents(siteID string) []*agentConnection {
@@ -58,7 +63,7 @@ func (s *Server) connectedAgents(siteID string) []*agentConnection {
 	sort.Slice(live, func(i, j int) bool { return live[i].key < live[j].key })
 	return live
 }
-func (s *Server) siteOnline(id string) bool { return len(s.connectedAgents(id)) > 0 }
+func (s *Server) siteOnline(id string) bool { return s.siteAgentCount(id) > 0 }
 func (s *Server) disconnectAgent(site, instance string) {
 	key := agentKey(site, instance)
 	s.tunnelMu.Lock()
@@ -82,6 +87,9 @@ func (c *agentChannel) Close() error {
 	return err
 }
 func (s *Server) dialSite(ctx context.Context, site, service, network, address string) (net.Conn, error) {
+	if s.cluster != nil {
+		return s.dialClusterSite(ctx, site, service, network, address)
+	}
 	candidates := s.connectedAgents(site)
 	if len(candidates) == 0 {
 		return nil, fmt.Errorf("site Agent is offline")
@@ -139,6 +147,27 @@ func (s *Server) agentView(a state.AgentRegistration) agentView {
 	if a.Disabled {
 		return v
 	}
+	if s.cluster != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		view, err := s.cluster.repo.ClusterRoutes(ctx, a.SiteID)
+		if err != nil {
+			return v
+		}
+		for _, r := range view.Routes {
+			if r.Agent.InstanceID == a.ID {
+				v.Online = true
+				v.AppliedPolicyVersion = r.Agent.PolicyVersion
+				t := r.Agent.ConnectedAt
+				v.ConnectedAt = &t
+				v.ActiveChannels = r.Agent.Channels
+				v.RemoteIP = r.Agent.RemoteIP
+				v.ReportedVersion = r.Agent.Version
+				break
+			}
+		}
+		return v
+	}
 	for _, c := range s.connectedAgents(a.SiteID) {
 		if c.instanceID == a.ID {
 			v.Online = true
@@ -176,6 +205,22 @@ func (s *Server) listAgents(w http.ResponseWriter, r *http.Request, u User) {
 		}
 	}
 	for _, site := range visible {
+		if s.cluster != nil {
+			ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+			view, err := s.cluster.repo.ClusterRoutes(ctx, site.ID)
+			cancel()
+			if err != nil {
+				fail(w, 503, "cluster Agent status unavailable")
+				return
+			}
+			for _, route := range view.Routes {
+				if route.Agent.InstanceID == "" {
+					t := route.Agent.ConnectedAt
+					out = append(out, agentView{ID: "legacy", SiteID: site.ID, Name: "兼容站点令牌实例", Legacy: true, Online: true, CreatedAt: site.CreatedAt, ConnectedAt: &t, ActiveChannels: route.Agent.Channels, RemoteIP: route.Agent.RemoteIP, ReportedVersion: route.Agent.Version})
+				}
+			}
+			continue
+		}
 		for _, c := range s.connectedAgents(site.ID) {
 			if c.instanceID == "" {
 				t := c.connectedAt
@@ -320,4 +365,82 @@ func (s *Server) manageAgent(w http.ResponseWriter, r *http.Request, u User) {
 	} else {
 		jsonOut(w, 200, s.agentView(out))
 	}
+}
+
+func (s *Server) dialLocalGeneration(ctx context.Context, site, service, key string, generation uint64, network, address string) (net.Conn, error) {
+	s.tunnelMu.Lock()
+	c := s.connections[key]
+	s.tunnelMu.Unlock()
+	if c == nil || c.siteID != site || c.generation != generation || c.closing.Load() || s.cluster == nil || !s.cluster.valid() {
+		return nil, state.ErrClusterLease
+	}
+	conn, err := s.tunnel.Dialer(c.key)(ctx, network, address)
+	if err != nil {
+		return nil, err
+	}
+	s.tunnelMu.Lock()
+	current := s.connections[key]
+	valid := current == c && !c.closing.Load() && s.cluster.valid()
+	s.tunnelMu.Unlock()
+	if !valid {
+		conn.Close()
+		return nil, state.ErrClusterLease
+	}
+	c.channels.Add(1)
+	s.audit("agent_channel_opened", "", site, service, map[string]any{"instanceID": c.instanceID, "ownerNode": s.cluster.node.ID, "generation": generation, "target": address})
+	return &agentChannel{Conn: conn, agent: c}, nil
+}
+func (s *Server) dialClusterSite(ctx context.Context, site, service, network, address string) (net.Conn, error) {
+	if !s.cluster.valid() {
+		return nil, state.ErrClusterLease
+	}
+	if _, ok := ctx.Value(clusterAuthorityKey{}).(clusterAuthority); !ok {
+		return nil, state.ErrAuthChanged
+	}
+	view, err := s.cluster.repo.ClusterRoutes(ctx, site)
+	if err != nil {
+		return nil, err
+	}
+	if !s.cluster.valid() {
+		return nil, state.ErrClusterLease
+	}
+	if len(view.Routes) == 0 {
+		return nil, fmt.Errorf("site Agent is offline")
+	}
+	s.tunnelMu.Lock()
+	offset := s.routes[site]
+	s.routes[site]++
+	s.tunnelMu.Unlock()
+	var last error
+	for i := 0; i < len(view.Routes); i++ {
+		route := view.Routes[(int(offset%uint64(len(view.Routes)))+i)%len(view.Routes)]
+		var conn net.Conn
+		if route.Node.ID == s.cluster.node.ID && route.Node.Epoch == s.cluster.node.Epoch {
+			conn, last = s.dialLocalGeneration(ctx, site, service, route.Agent.Key, route.Agent.Generation, network, address)
+		} else {
+			conn, last = s.cluster.dialRemote(ctx, view, route, service, network, address)
+		}
+		if last == nil {
+			return conn, nil
+		}
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+	}
+	return nil, last
+}
+func (s *Server) siteAgentCount(site string) int {
+	if s.cluster == nil {
+		return len(s.connectedAgents(site))
+	}
+	if !s.cluster.valid() {
+		return 0
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	view, err := s.cluster.repo.ClusterRoutes(ctx, site)
+	if err != nil {
+		return 0
+	}
+	return len(view.Routes)
 }

@@ -10,7 +10,7 @@ import (
 func pgCreateClusterSchema(ctx context.Context, tx *sql.Tx) error {
 	for _, q := range []string{
 		`CREATE TABLE IF NOT EXISTS tunnel_state.cluster_nodes(id TEXT PRIMARY KEY,epoch TEXT NOT NULL,endpoint TEXT UNIQUE,fingerprint TEXT NOT NULL,expires_at TIMESTAMPTZ NOT NULL)`,
-		`CREATE TABLE IF NOT EXISTS tunnel_state.cluster_agents(agent_key TEXT PRIMARY KEY,site_id TEXT NOT NULL,instance_id TEXT NOT NULL,generation BIGINT NOT NULL CHECK(generation>0),owner_id TEXT,owner_epoch TEXT,credential_hash TEXT NOT NULL,connected_at TIMESTAMPTZ NOT NULL,remote_ip TEXT NOT NULL,version TEXT NOT NULL,policy_version TEXT NOT NULL,channels BIGINT NOT NULL DEFAULT 0 CHECK(channels>=0),CHECK((owner_id IS NULL)=(owner_epoch IS NULL)))`,
+		`CREATE TABLE IF NOT EXISTS tunnel_state.cluster_agents(agent_key TEXT PRIMARY KEY,site_id TEXT NOT NULL,instance_id TEXT NOT NULL,generation BIGINT NOT NULL CHECK(generation>0),owner_id TEXT,owner_epoch TEXT,credential_hash TEXT NOT NULL,connected_at TIMESTAMPTZ NOT NULL,remote_ip TEXT NOT NULL,version TEXT NOT NULL,policy_version TEXT NOT NULL,channels BIGINT NOT NULL DEFAULT 0 CHECK(channels>=0),ready BOOLEAN NOT NULL DEFAULT false,CHECK((owner_id IS NULL)=(owner_epoch IS NULL)))`,
 		`CREATE INDEX IF NOT EXISTS cluster_agents_site ON tunnel_state.cluster_agents(site_id,agent_key)`,
 		`CREATE INDEX IF NOT EXISTS cluster_agents_owner ON tunnel_state.cluster_agents(owner_id,owner_epoch)`,
 	} {
@@ -112,7 +112,7 @@ func pgClusterNodes(ctx context.Context, tx *sql.Tx, now time.Time) ([]ClusterNo
 // Runtime ownership deliberately has no FK to replaceable configuration rows.
 // Every route joins the current credential/disabled state instead, so config
 // deletion and token rotation cannot leave an authoritative orphaned route.
-const clusterRoutesSQL = `SELECT c.agent_key,c.site_id,c.instance_id,c.generation,c.owner_id,c.owner_epoch,c.credential_hash,c.connected_at,c.remote_ip,c.version,c.policy_version,c.channels,n.id,n.epoch,n.endpoint,n.fingerprint,n.expires_at
+const clusterRoutesSQL = `SELECT c.agent_key,c.site_id,c.instance_id,c.generation,c.owner_id,c.owner_epoch,c.credential_hash,c.connected_at,c.remote_ip,c.version,c.policy_version,c.channels,c.ready,n.id,n.epoch,n.endpoint,n.fingerprint,n.expires_at
  FROM tunnel_state.cluster_agents c JOIN tunnel_state.cluster_nodes n ON n.id=c.owner_id AND n.epoch=c.owner_epoch
  JOIN tunnel_state.sites s ON s.id=c.site_id LEFT JOIN tunnel_state.agents a ON a.id=c.instance_id AND a.site_id=c.site_id
  WHERE n.expires_at>$1 AND n.endpoint IS NOT NULL
@@ -130,7 +130,7 @@ func pgClusterRoutes(ctx context.Context, tx *sql.Tx, now time.Time, where strin
 	for rows.Next() {
 		var r ClusterRoute
 		a, n := &r.Agent, &r.Node
-		if err = rows.Scan(&a.Key, &a.SiteID, &a.InstanceID, &a.Generation, &a.OwnerID, &a.OwnerEpoch, &a.CredentialHash, &a.ConnectedAt, &a.RemoteIP, &a.Version, &a.PolicyVersion, &a.Channels, &n.ID, &n.Epoch, &n.URL, &n.Fingerprint, &n.Expires); err != nil {
+		if err = rows.Scan(&a.Key, &a.SiteID, &a.InstanceID, &a.Generation, &a.OwnerID, &a.OwnerEpoch, &a.CredentialHash, &a.ConnectedAt, &a.RemoteIP, &a.Version, &a.PolicyVersion, &a.Channels, &a.Ready, &n.ID, &n.Epoch, &n.URL, &n.Fingerprint, &n.Expires); err != nil {
 			return nil, err
 		}
 		out = append(out, r)
@@ -155,7 +155,7 @@ func (p *PostgresRepository) ClusterHeartbeat(ctx context.Context, reports []Clu
 			if a.Channels < 0 {
 				return ErrClusterLease
 			}
-			if _, err := tx.ExecContext(ctx, `UPDATE tunnel_state.cluster_agents SET channels=$1 WHERE agent_key=$2 AND generation=$3 AND owner_id=$4 AND owner_epoch=$5`, a.Channels, a.Key, int64(a.Generation), p.nodeID, p.nodeEpoch); err != nil {
+			if _, err := tx.ExecContext(ctx, `UPDATE tunnel_state.cluster_agents SET channels=$1,ready=$6 WHERE agent_key=$2 AND generation=$3 AND owner_id=$4 AND owner_epoch=$5`, a.Channels, a.Key, int64(a.Generation), p.nodeID, p.nodeEpoch, a.Ready); err != nil {
 				return err
 			}
 		}
@@ -186,7 +186,7 @@ func (p *PostgresRepository) ClusterRoutes(ctx context.Context, site string) (Cl
 			return err
 		}
 		out.InstanceID, out.Now = m.InstanceID, now
-		out.Routes, err = pgClusterRoutes(ctx, tx, now, ` AND c.site_id=$2`, site)
+		out.Routes, err = pgClusterRoutes(ctx, tx, now, ` AND c.site_id=$2 AND c.ready`, site)
 		return err
 	})
 	if err != nil {
@@ -244,7 +244,7 @@ func (p *PostgresRepository) ClusterClaimAgent(ctx context.Context, a ClusterAge
 			return ErrAuthCapacity
 		}
 		a.OwnerID, a.OwnerEpoch, a.ConnectedAt = p.nodeID, p.nodeEpoch, now
-		err = tx.QueryRowContext(ctx, `INSERT INTO tunnel_state.cluster_agents(agent_key,site_id,instance_id,generation,owner_id,owner_epoch,credential_hash,connected_at,remote_ip,version,policy_version) VALUES($1,$2,$3,1,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT(agent_key) DO UPDATE SET site_id=excluded.site_id,instance_id=excluded.instance_id,generation=tunnel_state.cluster_agents.generation+1,owner_id=excluded.owner_id,owner_epoch=excluded.owner_epoch,credential_hash=excluded.credential_hash,connected_at=excluded.connected_at,remote_ip=excluded.remote_ip,version=excluded.version,policy_version=excluded.policy_version,channels=0 RETURNING generation`, a.Key, a.SiteID, a.InstanceID, a.OwnerID, a.OwnerEpoch, a.CredentialHash, a.ConnectedAt, a.RemoteIP, a.Version, a.PolicyVersion).Scan(&a.Generation)
+		err = tx.QueryRowContext(ctx, `INSERT INTO tunnel_state.cluster_agents(agent_key,site_id,instance_id,generation,owner_id,owner_epoch,credential_hash,connected_at,remote_ip,version,policy_version) VALUES($1,$2,$3,1,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT(agent_key) DO UPDATE SET site_id=excluded.site_id,instance_id=excluded.instance_id,generation=tunnel_state.cluster_agents.generation+1,owner_id=excluded.owner_id,owner_epoch=excluded.owner_epoch,credential_hash=excluded.credential_hash,connected_at=excluded.connected_at,remote_ip=excluded.remote_ip,version=excluded.version,policy_version=excluded.policy_version,channels=0,ready=false RETURNING generation`, a.Key, a.SiteID, a.InstanceID, a.OwnerID, a.OwnerEpoch, a.CredentialHash, a.ConnectedAt, a.RemoteIP, a.Version, a.PolicyVersion).Scan(&a.Generation)
 		if err != nil {
 			return err
 		}
@@ -265,7 +265,7 @@ func (p *PostgresRepository) ClusterReleaseAgent(ctx context.Context, key string
 		return ErrClusterLease
 	}
 	return p.authWrite(ctx, func(ctx context.Context, tx *sql.Tx, _ pgMetadata, _ time.Time) error {
-		_, err := tx.ExecContext(ctx, `UPDATE tunnel_state.cluster_agents SET owner_id=NULL,owner_epoch=NULL,channels=0 WHERE agent_key=$1 AND generation=$2 AND owner_id=$3 AND owner_epoch=$4`, key, int64(generation), p.nodeID, p.nodeEpoch)
+		_, err := tx.ExecContext(ctx, `UPDATE tunnel_state.cluster_agents SET owner_id=NULL,owner_epoch=NULL,channels=0,ready=false WHERE agent_key=$1 AND generation=$2 AND owner_id=$3 AND owner_epoch=$4`, key, int64(generation), p.nodeID, p.nodeEpoch)
 		return err
 	})
 }
@@ -326,3 +326,26 @@ func (p *PostgresRepository) validateClusterNode(ctx context.Context, tx *sql.Tx
 }
 
 var _ ClusterRepository = (*PostgresRepository)(nil)
+
+func (p *PostgresRepository) ClusterMembership(ctx context.Context) (ClusterSnapshot, error) {
+	if !p.cluster || p.nodeID == "" {
+		return ClusterSnapshot{}, ErrClusterLease
+	}
+	var out ClusterSnapshot
+	err := p.read(ctx, func(ctx context.Context, tx *sql.Tx, m pgMetadata) error {
+		if err := p.authPolicy(ctx, tx); err != nil {
+			return err
+		}
+		now, err := pgAuthNow(ctx, tx)
+		if err != nil {
+			return err
+		}
+		out.InstanceID, out.Now = m.InstanceID, now
+		out.Nodes, err = pgClusterNodes(ctx, tx, now)
+		return err
+	})
+	if err != nil {
+		return ClusterSnapshot{}, err
+	}
+	return out, nil
+}

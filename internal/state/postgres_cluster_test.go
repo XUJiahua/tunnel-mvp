@@ -46,6 +46,14 @@ func TestPostgresClusterOwnershipGenerationAndCredentialChanges(t *testing.T) {
 		t.Fatal("duplicate Agent admitted", err)
 	}
 	view, err := q.ClusterRoutes(ctx, "site-a")
+	if err != nil || len(view.Routes) != 0 {
+		t.Fatal("unready reservation advertised", err)
+	}
+	one.Agent.Ready = true
+	if _, err = p.ClusterHeartbeat(ctx, []ClusterAgent{one.Agent}); err != nil {
+		t.Fatal(err)
+	}
+	view, err = q.ClusterRoutes(ctx, "site-a")
 	if err != nil || len(view.Routes) != 1 || view.Routes[0].Node.ID != "a" {
 		t.Fatal("remote owner missing", err)
 	}
@@ -62,6 +70,10 @@ func TestPostgresClusterOwnershipGenerationAndCredentialChanges(t *testing.T) {
 		t.Fatal("generation did not increase", err)
 	}
 	if err = p.ClusterReleaseAgent(ctx, one.Agent.Key, one.Agent.Generation); err != nil {
+		t.Fatal(err)
+	}
+	two.Agent.Ready = true
+	if _, err = q.ClusterHeartbeat(ctx, []ClusterAgent{two.Agent}); err != nil {
 		t.Fatal(err)
 	}
 	view, err = p.ClusterRoutes(ctx, "site-a")
@@ -101,6 +113,10 @@ func TestPostgresClusterExpiredIncarnationsCannotRevive(t *testing.T) {
 	successor, err := q.ClusterClaimAgent(ctx, ClusterAgent{SiteID: "site-a", CredentialHash: initial.Sites[0].TokenHash})
 	if err != nil || successor.Agent.Generation <= claim.Agent.Generation {
 		t.Fatal("expired owner not replaced", err)
+	}
+	successor.Agent.Ready = true
+	if _, err = q.ClusterHeartbeat(ctx, []ClusterAgent{successor.Agent}); err != nil {
+		t.Fatal(err)
 	}
 	if _, err = p.ClusterHeartbeat(ctx, nil); !errors.Is(err, ErrClusterLease) {
 		t.Fatal("expired node revived", err)

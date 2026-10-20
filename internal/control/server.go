@@ -26,6 +26,7 @@ import (
 )
 
 type Server struct {
+	cluster          *clusterRuntime
 	nodeID           string
 	storageFenced    atomic.Bool
 	identitySync     *keycloakSync
@@ -65,11 +66,19 @@ func New(c config.Server, password string) (*Server, error) {
 	return newServer(c, password, nil)
 }
 
-// Repository injection is private: production keeps the exclusive runtime lease
-// until distributed agent ownership and routing are implemented.
+// Repository injection is private and supports deterministic failure testing.
+// Production chooses an exclusive standalone lease or explicit cluster mode.
 func newServer(c config.Server, password string, repository state.Repository) (*Server, error) {
 	if err := c.Validate(); err != nil {
 		return nil, err
+	}
+	var internalTLS *clusterTLS
+	var tlsErr error
+	if c.Cluster.Enabled {
+		internalTLS, tlsErr = loadClusterTLS(c.Cluster)
+		if tlsErr != nil {
+			return nil, tlsErr
+		}
 	}
 	if err := state.CheckOperationsRestore(c.DataDir); err != nil {
 		return nil, err
@@ -77,7 +86,7 @@ func newServer(c config.Server, password string, repository state.Repository) (*
 	var st *Store
 	var err error
 	if repository == nil {
-		st, err = openStore(c.DataDir, c.Storage, c.AdminUsername, password)
+		st, err = openServingStore(c.DataDir, c.Storage, c.AdminUsername, password, c.Cluster.Enabled)
 	} else {
 		err = os.MkdirAll(c.DataDir, 0700)
 		st = &Store{repository}
@@ -94,6 +103,9 @@ func newServer(c config.Server, password string, repository state.Repository) (*
 	a, _ := url.Parse(c.AccessURL)
 	h, _ := bcrypt.GenerateFromPassword([]byte(randomID()), bcrypt.DefaultCost)
 	s := &Server{cfg: c, store: st, auth: newAuth(), secure: p.Scheme == "https", public: p, access: a, auditFile: af, dummyHash: string(h), connections: map[string]*agentConnection{}, routes: map[string]uint64{}, live: map[string]liveRequest{}, pools: map[string]pooledTransport{}, reports: map[string]probeReport{}, metricsToken: os.Getenv("TUNNEL_METRICS_TOKEN"), diagnosticCache: map[string]diagnosticRecord{}}
+	if internalTLS != nil {
+		s.cluster = &clusterRuntime{tls: internalTLS}
+	}
 	for _, svc := range st.snapshot().Services {
 		if err := s.validateDomain(User{Role: "admin"}, svc.CustomDomain); err != nil {
 			af.Close()
@@ -145,11 +157,19 @@ func newServer(c config.Server, password string, repository state.Repository) (*
 		_ = st.Close()
 		return nil, err
 	}
+	if err := s.configureCluster(); err != nil {
+		af.Close()
+		st.Close()
+		return nil, err
+	}
 	s.startBackground()
 	ready = true
 	return s, nil
 }
 func (s *Server) Close() {
+	if s.cluster != nil {
+		s.cluster.stopAdmission()
+	}
 	s.backgroundCancel()
 	s.backgroundWG.Wait()
 	s.cancelRequests(func(liveRequest) bool { return true })
@@ -167,6 +187,9 @@ func (s *Server) Close() {
 	}
 	s.tunnelMu.Unlock()
 	s.tunnelWG.Wait()
+	if s.cluster != nil {
+		s.cluster.close()
+	}
 	s.history.close()
 	s.auditMu.Lock()
 	defer s.auditMu.Unlock()
@@ -343,7 +366,7 @@ func (s *Server) Handler() http.Handler {
 		static.ServeHTTP(w, r)
 	})
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if s.storageFenced.Load() {
+		if s.storageFenced.Load() || s.cluster != nil && !s.cluster.valid() {
 			fail(w, 503, "control plane storage unavailable; offline recovery required")
 			return
 		}
@@ -440,8 +463,30 @@ func (s *Server) connect(w http.ResponseWriter, r *http.Request) {
 	if len(version) > 128 {
 		version = version[:128]
 	}
+	var generation uint64
+	if s.cluster != nil {
+		if !s.cluster.valid() {
+			fail(w, 503, "cluster unavailable")
+			return
+		}
+		route, err := s.cluster.repo.ClusterClaimAgent(r.Context(), state.ClusterAgent{SiteID: siteID, InstanceID: instance, CredentialHash: digest(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")), RemoteIP: remote, Version: version, PolicyVersion: policyVersion})
+		if err != nil {
+			if errors.Is(err, state.ErrClusterBusy) {
+				fail(w, 409, "Agent instance already owned")
+			} else {
+				fail(w, 503, "cluster claim unavailable")
+			}
+			return
+		}
+		generation = route.Agent.Generation
+		defer func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			_ = s.cluster.repo.ClusterReleaseAgent(ctx, key, generation)
+		}()
+	}
 	s.tunnelMu.Lock()
-	if s.closing {
+	if s.closing || s.cluster != nil && !s.cluster.valid() {
 		s.tunnelMu.Unlock()
 		fail(w, 503, "server shutting down")
 		return
@@ -453,6 +498,11 @@ func (s *Server) connect(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithCancel(r.Context())
 	connection := &agentConnection{policyVersion: policyVersion, key: key, siteID: siteID, instanceID: instance, organizationID: site.OrganizationID, remoteIP: remote, version: version, connectedAt: time.Now().UTC(), cancel: cancel}
+	connection.generation = generation
+	if s.cluster != nil {
+		connection.key = key + "~g" + fmt.Sprint(generation)
+		ctx = context.WithValue(ctx, clusterAgentKey{}, connection.key)
+	}
 	s.connections[key] = connection
 	s.tunnelWG.Add(1)
 	s.tunnelMu.Unlock()
@@ -461,7 +511,9 @@ func (s *Server) connect(w http.ResponseWriter, r *http.Request) {
 		connection.closing.Store(true)
 		cancel()
 		s.tunnelMu.Lock()
-		delete(s.connections, key)
+		if s.connections[key] == connection {
+			delete(s.connections, key)
+		}
 		s.tunnelMu.Unlock()
 		s.dropSiteTransports(siteID)
 		s.audit("agent_disconnected", "", siteID, "", map[string]any{"instanceID": instance, "organizationID": site.OrganizationID})
@@ -492,7 +544,7 @@ func (s *Server) listSites(w http.ResponseWriter, r *http.Request, u User) {
 	}
 	out := []map[string]any{}
 	for _, site := range st.Sites {
-		out = append(out, map[string]any{"id": site.ID, "name": site.Name, "createdAt": site.CreatedAt, "organizationID": site.OrganizationID, "legacyDisabled": site.LegacyDisabled, "agentCount": len(s.connectedAgents(site.ID)), "online": s.siteOnline(site.ID)})
+		out = append(out, map[string]any{"id": site.ID, "name": site.Name, "createdAt": site.CreatedAt, "organizationID": site.OrganizationID, "legacyDisabled": site.LegacyDisabled, "agentCount": s.siteAgentCount(site.ID), "online": s.siteOnline(site.ID)})
 	}
 	jsonOut(w, 200, out)
 }

@@ -29,12 +29,15 @@ type counters struct{ requests, errors, probes, historyErrors, auditIndexErrors,
 func (s *Server) serviceTransport(svc Service, sessions ...string) *http.Transport {
 	session := ""
 	key := svc.ID
-	if svc.ConnectionMode == "session" {
+	if svc.ConnectionMode == "session" || s.cluster != nil {
 		session = "probe"
 		if len(sessions) > 0 && sessions[0] != "" {
 			session = sessions[0]
 		}
 		key += "~" + session
+		if s.cluster != nil && len(sessions) > 1 {
+			key += "~" + sessions[1]
+		}
 	}
 	s.poolMu.Lock()
 	defer s.poolMu.Unlock()
@@ -158,6 +161,7 @@ func (s *Server) startBackground() {
 	s.startIdentitySync(ctx)
 	s.startStorageFence(ctx)
 	s.startSharedAuth(ctx)
+	s.startCluster(ctx)
 }
 func (s *Server) probeAll(ctx context.Context) {
 	// Four workers bound concurrency and shutdown latency; one batch at a time.
@@ -277,7 +281,7 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request, _ User) {
 		if s.siteOnline(site.ID) {
 			online = 1
 		}
-		fmt.Fprintf(w, "tunnel_site_online{site_id=%q} %d\ntunnel_site_agents{site_id=%q} %d\n", site.ID, online, site.ID, len(s.connectedAgents(site.ID)))
+		fmt.Fprintf(w, "tunnel_site_online{site_id=%q} %d\ntunnel_site_agents{site_id=%q} %d\n", site.ID, online, site.ID, s.siteAgentCount(site.ID))
 	}
 	s.monitorMu.Lock()
 	defer s.monitorMu.Unlock()

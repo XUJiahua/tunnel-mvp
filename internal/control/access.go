@@ -10,6 +10,7 @@ import (
 // accessMu orders credential/resource changes with authentication and live
 // request registration. It is never held while forwarding network traffic.
 type liveRequest struct {
+	system                        bool
 	route                         Service
 	accessKey, method             string
 	lease                         *authLease
