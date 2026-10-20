@@ -1,0 +1,13 @@
+{
+  "listen": ":8080",
+  "publicURL": "https://console.example.com",
+  "accessURL": "https://access.example.net",
+  "storage": "sqlite",
+  "dataDir": "/var/lib/tunnel",
+  "adminUsername": "admin",
+  "oidc": {
+    "issuer": "https://sso.example.com/realms/tunnel",
+    "clientID": "tunnel-console",
+    "sessionMinutes": 60
+  }
+}

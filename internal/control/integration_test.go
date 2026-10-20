@@ -40,7 +40,7 @@ func setup(t *testing.T) *fixture {
 	t.Helper()
 	h := httptest.NewUnstartedServer(nil)
 	dir := t.TempDir()
-	s, err := New(config.Server{PublicURL: "http://" + h.Listener.Addr().String(), AccessURL: "http://apps.localhost:" + strconv.Itoa(h.Listener.Addr().(*net.TCPAddr).Port), DataDir: dir}, testPassword)
+	s, err := New(config.Server{PublicURL: "http://" + h.Listener.Addr().String(), AccessURL: "http://apps.localhost:" + strconv.Itoa(h.Listener.Addr().(*net.TCPAddr).Port), DataDir: dir, Storage: os.Getenv("TUNNEL_TEST_STORAGE")}, testPassword)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -282,7 +282,11 @@ func TestRealTunnelProxyAndRevocation(t *testing.T) {
 	cancelAgent()
 	waitFor(t, func() bool { return !f.s.tunnel.HasSession(site.ID) })
 	// Tokens and plaintext passwords must never reach persistent state or audit.
-	for _, name := range []string{"state.json", "audit.jsonl"} {
+	stateName := "state.json"
+	if f.s.cfg.Storage == "sqlite" {
+		stateName = "state.db"
+	}
+	for _, name := range []string{stateName, "audit.jsonl"} {
 		data, err := os.ReadFile(filepath.Join(f.dir, name))
 		if err != nil {
 			t.Fatal(err)
@@ -397,15 +401,7 @@ func TestCSRFTrustAndPersistence(t *testing.T) {
 	if resp.StatusCode != 403 {
 		t.Fatal("cross-origin write accepted")
 	}
-	_, token := f.site(t, "persistent")
-	reopened, err := OpenStore(f.dir, "ignored", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	st := reopened.snapshot()
-	if len(st.Sites) != 1 || st.Sites[0].TokenHash != digest(token) {
-		t.Fatal("state not restored")
-	}
+	persistent, persistentToken := f.site(t, "persistent")
 	// TLS remains verified even though the connection is opened through an Agent.
 	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, "secret") }))
 	defer upstream.Close()
@@ -417,6 +413,18 @@ func TestCSRFTrustAndPersistence(t *testing.T) {
 	if resp.StatusCode != 502 {
 		t.Fatal("untrusted origin certificate accepted")
 	}
+	f.h.Close()
+	f.s.Close()
+	reopened, err := openStore(f.dir, f.s.cfg.Storage, "ignored", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	saved, ok := reopened.site(persistent.ID)
+	if !ok || saved.TokenHash != digest(persistentToken) {
+		t.Fatal("state not restored")
+	}
+
 }
 
 func TestLocalProbeDiagnosticsSurviveTunnel(t *testing.T) {

@@ -15,8 +15,12 @@ const consoleCookie = "tunnel_console"
 const accessCookie = "tunnel_access"
 
 type session struct {
-	UserID  string
-	Expires time.Time
+	ID                          string
+	CreatedAt, LastSeen         time.Time
+	UserAgent, RemoteIP, Method string
+	Issuer, Subject, SID        string
+	UserID                      string
+	Expires                     time.Time
 }
 type grant struct {
 	SessionKey string
@@ -68,12 +72,12 @@ func (a *authState) clean(now time.Time) { // caller holds mu
 		}
 	}
 	for k, v := range a.tickets {
-		if now.After(v.Expires) {
+		if _, ok := a.sessions[v.SessionKey]; !ok || now.After(v.Expires) {
 			delete(a.tickets, k)
 		}
 	}
 	for k, v := range a.access {
-		if now.After(v.Expires) {
+		if _, ok := a.sessions[v.SessionKey]; !ok || now.After(v.Expires) {
 			delete(a.access, k)
 		}
 	}
@@ -91,14 +95,20 @@ func (s *Server) currentUser(r *http.Request) (User, string, bool) {
 	key := digest(c.Value)
 	s.auth.mu.Lock()
 	sess, ok := s.auth.sessions[key]
+	if ok && time.Since(sess.LastSeen) >= time.Minute {
+		sess.LastSeen = time.Now()
+		s.auth.sessions[key] = sess
+	}
 	s.auth.mu.Unlock()
-	if !ok || time.Now().After(sess.Expires) {
+	if !ok || time.Now().After(sess.Expires) || !s.identitySessionAllowed(sess) {
 		return User{}, "", false
 	}
 	u, ok := s.store.user(sess.UserID)
-	return u, key, ok
+	return u, key, ok && !u.Disabled
 }
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {
+	s.accessMu.RLock()
+	defer s.accessMu.RUnlock()
 	var body struct {
 		Username string `json:"username"`
 		Password string `json:"password"`
@@ -132,18 +142,14 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		hash = s.dummyHash
 	}
 	err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(body.Password))
-	if err != nil || found.ID == "" {
+	if err != nil || found.ID == "" || found.Disabled || found.PasswordHash == "" {
 		s.audit("login_failed", body.Username, "", "")
 		fail(w, 401, "invalid username or password")
 		return
 	}
-	token := randomID()
-	s.auth.mu.Lock()
-	s.auth.sessions[digest(token)] = session{found.ID, time.Now().Add(12 * time.Hour)}
-	s.auth.mu.Unlock()
-	http.SetCookie(w, &http.Cookie{Name: consoleCookie, Value: token, Path: "/", HttpOnly: true, Secure: s.secure, SameSite: http.SameSiteLaxMode, MaxAge: 43200})
-	found.PasswordHash = ""
+	s.issueSession(w, found, time.Now().Add(12*time.Hour), sessionMetadata(r, "password", "", "", ""))
 	s.audit("login", found.Username, "", "")
-	jsonOut(w, 200, found)
+	found, _ = s.store.user(found.ID)
+	jsonOut(w, 200, publicUser(found))
 }
 func constantEqual(a, b string) bool { return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1 }

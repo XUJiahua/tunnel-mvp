@@ -1,0 +1,12 @@
+goos: linux
+goarch: amd64
+pkg: github.com/XUJiahua/tunnel-mvp/internal/state
+cpu: AMD EPYC 9V74 80-Core Processor                
+BenchmarkUserContext/snapshot-8         	     100	   4283512 ns/op	 2100302 B/op	    5075 allocs/op
+BenchmarkUserContext/snapshot-8         	     100	   3355730 ns/op	 2038872 B/op	    5074 allocs/op
+BenchmarkUserContext/snapshot-8         	     100	   3143962 ns/op	 2069328 B/op	    5074 allocs/op
+BenchmarkUserContext/sql-projection-8   	     100	    127229 ns/op	    6324 B/op	     156 allocs/op
+BenchmarkUserContext/sql-projection-8   	     100	    146578 ns/op	    6376 B/op	     156 allocs/op
+BenchmarkUserContext/sql-projection-8   	     100	    146280 ns/op	    6376 B/op	     156 allocs/op
+PASS
+ok  	github.com/XUJiahua/tunnel-mvp/internal/state	1.243s

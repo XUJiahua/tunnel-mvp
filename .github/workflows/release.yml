@@ -48,17 +48,45 @@ jobs:
         run: make build
       - name: Test Go and TypeScript
         run: make test
+      - name: Verify published v0.1.1 upgrade and rollback
+        run: bash scripts/verify-upgrade.sh bin/tunnel "$RUNNER_TEMP/tunnel-upgrade"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-upgrade-v0.1.1-report
+          path: ${{ runner.temp }}/tunnel-upgrade/report.json
       - name: Install test browser
         run: pnpm exec playwright install --with-deps chromium
         working-directory: web
       - name: Verify browser-to-Agent access
         run: pnpm run test:e2e
         working-directory: web
+      - name: Verify browser access with SQLite
+        run: pnpm run test:e2e
+        working-directory: web
+        env:
+          TUNNEL_TEST_STORAGE: sqlite
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Prepare verified Keycloak distribution
+        run: bash scripts/prepare-keycloak-e2e.sh "$RUNNER_TEMP/tunnel-keycloak"
+      - name: Verify real Keycloak and OTP with JSON
+        run: pnpm exec playwright test tests/keycloak.spec.ts
+        working-directory: web
+        env:
+          KEYCLOAK_HOME: ${{ runner.temp }}/tunnel-keycloak/server
+      - name: Verify real Keycloak and OTP with SQLite
+        run: pnpm exec playwright test tests/keycloak.spec.ts
+        working-directory: web
+        env:
+          KEYCLOAK_HOME: ${{ runner.temp }}/tunnel-keycloak/server
+          TUNNEL_TEST_STORAGE: sqlite
       - name: Install GoReleaser
         uses: goreleaser/goreleaser-action@v7
         with:
           distribution: goreleaser
-          version: v2.18.3
+          version: v2.17.1
           install-only: true
       - name: Validate release configuration
         run: goreleaser check
@@ -67,7 +95,8 @@ jobs:
           RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
         run: bash scripts/prepare-release.sh
       - name: Cross-compile and upload packages to a draft Release
-        run: goreleaser release --clean --parallelism 2
+        # Parallel snapshots produced truncated tar.gz; serialize and retain integrity gates.
+        run: goreleaser release --clean --parallelism 1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NEXT_TELEMETRY_DISABLED: '1'

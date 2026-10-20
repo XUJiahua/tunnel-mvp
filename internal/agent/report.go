@@ -26,6 +26,7 @@ func newReporter(root context.Context, c config.Agent, token string) (func(*diag
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Authorization", "Bearer "+token)
 		req.Header.Set("X-Tunnel-Site", c.SiteID)
+		req.Header.Set("X-Tunnel-Instance", c.InstanceID)
 		resp, err := client.Do(req)
 		if err != nil {
 			slog.Warn("agent diagnostic upload failed", "site_id", c.SiteID, "agent_request_id", failure.AgentRequestID, "error", err)

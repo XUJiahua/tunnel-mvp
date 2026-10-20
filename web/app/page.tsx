@@ -9,16 +9,57 @@ import {
   useState,
 } from "react";
 
+import { AgentsPanel } from "./agents";
+import { MonitoringHistory } from "./history";
+import { BulkApplications } from "./bulk";
+import { OrganizationsPanel } from "./organizations";
+import { AdministratorsPanel } from "./administrators";
+import { GroupsPanel } from "./groups";
+import { InvitationLanding } from "./invitation";
+import { SessionsPanel } from "./sessions";
+import { api, APIError } from "./api";
+import { AuditPanel, Editor, Grants, ResourceEditor } from "./operations";
+
 type User = {
   id: string;
   username: string;
   role: "admin" | "viewer";
+  organizationID?: string;
+  roleID?: string;
+  permissions?: string[];
   siteIDs: string[];
+  serviceIDs?: string[];
+  disabled?: boolean;
+  identity?: { issuer: string; subject: string };
+  passwordLogin?: boolean;
+  sessionMethod?: string;
 };
-type Site = { id: string; name: string; online: boolean; createdAt: string };
-type Service = { id: string; name: string; siteID: string; url: string };
+type Site = {
+  legacyDisabled?: boolean;
+  agentCount?: number;
+  organizationID?: string;
+  id: string;
+  name: string;
+  online: boolean;
+  createdAt: string;
+};
+type Service = {
+  connectionMode?: string;
+  organizationID?: string;
+  accessible?: boolean;
+  customDomain?: string;
+  healthPath?: string;
+  healthMethod?: string;
+  healthExpectedStatus?: number;
+  id: string;
+  name: string;
+  siteID: string;
+  url: string;
+};
 type Probe = {
   reachable: boolean;
+  healthy?: boolean;
+  serviceID?: string;
   status?: number;
   latencyMs?: number;
   message?: string;
@@ -27,6 +68,7 @@ type Probe = {
   hint?: string;
   requestID?: string;
   agentRequestID?: string;
+  agentInstanceID?: string;
   siteID?: string;
   target?: string;
   checkedAt?: string;
@@ -35,33 +77,6 @@ type Probe = {
 };
 type Dialog = "site" | "service" | "user" | null;
 type Enrollment = { id: string; name: string; token: string };
-
-class APIError extends Error {
-  constructor(
-    message: string,
-    public status: number,
-  ) {
-    super(message);
-  }
-}
-
-async function api<T>(
-  path: string,
-  method = "GET",
-  body?: unknown,
-): Promise<T> {
-  const res = await fetch(`/api${path}`, {
-    method,
-    credentials: "same-origin",
-    cache: "no-store",
-    headers: body === undefined ? {} : { "Content-Type": "application/json" },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  const data = await res.json();
-  if (!res.ok)
-    throw new APIError(data.error || `请求失败 (${res.status})`, res.status);
-  return data as T;
-}
 
 function Icon({ name, size = 20 }: { name: string; size?: number }) {
   const paths: Record<string, ReactNode> = {
@@ -195,6 +210,17 @@ function Modal({
 }
 
 export default function Home() {
+  const [authOptions, setAuthOptions] = useState({
+    oidc: false,
+    issuer: "",
+    oidcLogout: false,
+  });
+  const [organizations, setOrganizations] = useState<
+    { id: string; name: string }[]
+  >([]);
+  const [organization, setOrganization] = useState("default");
+  const [inviteToken, setInviteToken] = useState("");
+  const [memberAuth, setMemberAuth] = useState("local");
   const [user, setUser] = useState<User | null>(null);
   const [booting, setBooting] = useState(true);
   const [connected, setConnected] = useState(true);
@@ -202,6 +228,7 @@ export default function Home() {
   const [sites, setSites] = useState<Site[]>([]);
   const [services, setServices] = useState<Service[]>([]);
   const [users, setUsers] = useState<User[]>([]);
+  const [editor, setEditor] = useState<Editor | null>(null);
   const [dialog, setDialog] = useState<Dialog>(null);
   const [enrollment, setEnrollment] = useState<Enrollment | null>(null);
   const [error, setError] = useState("");
@@ -216,20 +243,90 @@ export default function Home() {
   } | null>(null);
   const [probing, setProbing] = useState("");
   const [opening, setOpening] = useState("");
-  const admin = user?.role === "admin";
+  const root = user?.role === "admin";
+  const permitted = (p: string) => !!root || !!user?.permissions?.includes(p);
+  const admin =
+    !!root ||
+    !!user?.permissions?.some(
+      (p) => p.endsWith(":manage") || p === "audit:read",
+    );
+  const sessionExpired = useCallback(() => {
+    setUser(null);
+    setTab("overview");
+  }, []);
 
-  const refresh = useCallback(async (u: User) => {
-    const [a, b, c] = await Promise.all([
-      api<Site[]>("/sites"),
-      api<Service[]>("/services"),
-      u.role === "admin" ? api<User[]>("/users") : Promise.resolve([]),
-    ]);
-    setSites(a);
-    setServices(b);
-    setUsers(c);
-    setConnected(true);
+  const refresh = useCallback(
+    async (u: User) => {
+      const [rawSites, rawServices, rawUsers, health, orgs] = await Promise.all(
+        [
+          api<Site[]>("/sites"),
+          api<Service[]>("/services"),
+          u.role === "admin" || u.permissions?.includes("members:manage")
+            ? api<User[]>("/users")
+            : u.permissions?.includes("groups:manage")
+              ? api<User[]>("/group-members")
+              : Promise.resolve([]),
+          api<{ reports: Probe[] }>("/status"),
+          api<{ id: string; name: string }[]>("/organizations"),
+        ],
+      );
+      const owned = (v: { organizationID?: string }) =>
+        u.role !== "admin" || (v.organizationID || "default") === organization;
+      const a = rawSites.filter(owned),
+        b = rawServices.filter(owned),
+        c = rawUsers.filter((v) => v.role === "admin" || owned(v));
+      setOrganizations(orgs);
+      setProbes((previous) => {
+        const next: Record<string, Probe> = {};
+        for (const service of b) {
+          const previousReport = previous[service.id];
+          const current =
+            previousReport?.target === service.url &&
+            previousReport.siteID === service.siteID
+              ? previousReport
+              : undefined;
+          const report = health.reports.find((p) => p.serviceID === service.id);
+          if (
+            report &&
+            (!current?.checkedAt ||
+              (report.checkedAt || "") >= current.checkedAt)
+          )
+            next[service.id] = report;
+          else if (current) next[service.id] = current;
+        }
+        return next;
+      });
+      setSites(a);
+      setServices(b);
+      setUsers(c);
+      setConnected(true);
+    },
+    [organization],
+  );
+  useEffect(() => {
+    const read = () => {
+      const token = new URLSearchParams(window.location.hash.slice(1)).get(
+        "invite",
+      );
+      if (token) {
+        setInviteToken(token);
+        window.history.replaceState(null, "", "/");
+      }
+    };
+    read();
+    window.addEventListener("hashchange", read);
+    return () => window.removeEventListener("hashchange", read);
   }, []);
   useEffect(() => {
+    api<typeof authOptions>("/auth/options")
+      .then(setAuthOptions)
+      .catch(() => {});
+    if (
+      new URLSearchParams(window.location.search).get("login_error") === "oidc"
+    ) {
+      setError("统一登录失败。请重试，或联系管理员核对身份绑定与账号状态。");
+      window.history.replaceState(null, "", "/");
+    }
     api<User>("/me")
       .then(async (u) => {
         setUser(u);
@@ -279,6 +376,8 @@ export default function Home() {
       setServices([]);
       setUsers([]);
       setEnrollment(null);
+      setEditor(null);
+      setProbes({});
       setError("");
     } catch (e) {
       setError((e as Error).message);
@@ -293,6 +392,7 @@ export default function Home() {
       if (dialog === "site") {
         const res = await api<{ site: Site; token: string }>("/sites", "POST", {
           name: data.get("name"),
+          organizationID: root ? organization : user?.organizationID,
         });
         setEnrollment({ ...res.site, token: res.token });
       }
@@ -301,8 +401,11 @@ export default function Home() {
       if (dialog === "user")
         await api("/users", "POST", {
           username: data.get("username"),
-          password: data.get("password"),
+          organizationID: root ? organization : user?.organizationID,
+          password: data.get("password") || "",
+          oidcSubject: data.get("oidcSubject") || "",
           siteIDs: data.getAll("siteIDs"),
+          serviceIDs: data.getAll("serviceIDs"),
         });
       setDialog(null);
       if (user) await refresh(user);
@@ -375,7 +478,9 @@ export default function Home() {
       if (!res.reachable) setDiagnostic({ service, result: res });
       else {
         setDiagnostic(null);
-        setNotice(`检测成功 · HTTP ${res.status}`);
+        setNotice(
+          `HTTP 可达 · HTTP ${res.status}${res.healthy === false ? "，请检查业务状态" : ""}`,
+        );
       }
     } catch (e) {
       setError((e as Error).message);
@@ -406,7 +511,15 @@ export default function Home() {
     overview: ["让每个内网，触手可及。", "一个入口，连接分散的站点与应用。"],
     sites: ["站点", "连接你的数据面，建立安全的出站隧道。"],
     services: ["应用", "从这里进入已授权的内网服务。"],
-    users: ["访问权限", "为成员分配站点访问权限。"],
+    users: ["访问权限", "为成员分配整站或单独应用访问权限。"],
+    agents: ["Agent 实例", "独立凭据、连接归属与故障切换。"],
+    history: ["监控历史", "业务健康与响应延迟，按应用授权可见。"],
+    bulk: ["批量应用", "批量创建、迁移或删除同组织应用。"],
+    organizations: ["组织与角色", "设置组织边界、管理能力和角色成员。"],
+    administrators: ["管理员", "管理全局管理员，敏感变更需要再次验证密码。"],
+    groups: ["用户组与邀请", "管理共享授权，并邀请成员自行设置密码。"],
+    sessions: ["登录设备", "查看活跃会话，并撤销指定设备的访问。"],
+    audit: ["审计日志", "查询访问、权限变更与健康状态变化。"],
   };
 
   if (booting)
@@ -415,6 +528,19 @@ export default function Home() {
         <Logo />
         <p>正在连接控制面…</p>
       </div>
+    );
+  if (inviteToken)
+    return (
+      <InvitationLanding
+        token={inviteToken}
+        onCancel={() => setInviteToken("")}
+        onAccepted={async (member) => {
+          setUser(member);
+          setInviteToken("");
+          setTab("overview");
+          await refresh(member);
+        }}
+      />
     );
   if (!user)
     return (
@@ -479,6 +605,11 @@ export default function Home() {
                 <Icon name="arrow" size={17} />
               </button>
             </form>
+            {authOptions.oidc && (
+              <a className="secondary full oidc-login" href="/auth/oidc/start">
+                使用统一身份登录
+              </a>
+            )}
             <p className="login-foot">
               <Icon name="shield" size={16} /> 仅可访问管理员授权的站点与应用
             </p>
@@ -488,7 +619,13 @@ export default function Home() {
     );
 
   const addButton = (type: Dialog, label: string) =>
-    admin && (
+    permitted(
+      type === "site"
+        ? "sites:manage"
+        : type === "service"
+          ? "applications:manage"
+          : "members:manage",
+    ) && (
       <button
         className="primary"
         onClick={() => {
@@ -533,8 +670,14 @@ export default function Home() {
             >
               查看应用 →
             </button>
-            {admin && (
+            {permitted("sites:manage") && (
               <div>
+                <button
+                  className="subtle"
+                  onClick={() => setEditor({ kind: "site", site })}
+                >
+                  编辑
+                </button>
                 <button className="subtle" onClick={() => rotate(site)}>
                   令牌
                 </button>
@@ -586,10 +729,14 @@ export default function Home() {
                 </td>
                 <td>
                   <button
-                    className={`probe ${p ? (p.reachable ? "good" : "bad") : ""}`}
+                    className={`probe ${p ? (p.reachable && p.healthy !== false ? "good" : "bad") : ""}`}
                     onClick={() => probe(service)}
                     disabled={probing === service.id}
-                    title={p?.message}
+                    title={
+                      p?.checkedAt
+                        ? `探测于 ${new Date(p.checkedAt).toLocaleString()} · ${p.healthy ? "HEAD 返回 2xx/3xx" : p.reachable ? "HTTP 可达，请检查业务状态" : p.message}`
+                        : p?.message
+                    }
                   >
                     {probing === service.id
                       ? "探测中…"
@@ -612,13 +759,25 @@ export default function Home() {
                   <div className="row-actions">
                     <button
                       className="open-button"
-                      disabled={!site?.online || opening === service.id}
+                      disabled={
+                        !site?.online ||
+                        opening === service.id ||
+                        service.accessible === false
+                      }
                       onClick={() => launch(service)}
                     >
                       {opening === service.id ? "打开中…" : "打开"}
                       <Icon name="arrow" size={15} />
                     </button>
-                    {admin && (
+                    {permitted("applications:manage") && (
+                      <button
+                        className="subtle"
+                        onClick={() => setEditor({ kind: "service", service })}
+                      >
+                        编辑
+                      </button>
+                    )}
+                    {permitted("applications:manage") && (
                       <button
                         className="subtle danger"
                         onClick={() =>
@@ -650,13 +809,55 @@ export default function Home() {
           </div>
           <span className="version">MVP</span>
         </div>
+        {root && (
+          <label className="field">
+            <span>组织范围</span>
+            <select
+              aria-label="组织范围"
+              value={organization}
+              onChange={(e) => {
+                setOrganization(e.target.value);
+                setSiteFilter("");
+                setEditor(null);
+                setDialog(null);
+                setProbes({});
+              }}
+            >
+              {organizations.map((o) => (
+                <option key={o.id} value={o.id}>
+                  {o.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
         <span className="nav-label">工作空间</span>
         <nav>
           {[
             ["overview", "grid", "概览"],
             ["sites", "server", "站点"],
             ["services", "apps", "应用"],
-            ...(admin ? [["users", "users", "访问权限"]] : []),
+            ["sessions", "shield", "登录设备"],
+            ["history", "grid", "监控历史"],
+            ...(permitted("sites:manage")
+              ? [["agents", "server", "Agent 实例"]]
+              : []),
+            ...(permitted("members:manage")
+              ? [["users", "users", "访问权限"]]
+              : []),
+            ...(permitted("groups:manage")
+              ? [["groups", "users", "用户组与邀请"]]
+              : []),
+            ...(permitted("applications:manage")
+              ? [["bulk", "apps", "批量应用"]]
+              : []),
+            ...(permitted("roles:manage")
+              ? [["organizations", "grid", "组织与角色"]]
+              : []),
+            ...(root ? [["administrators", "shield", "管理员"]] : []),
+            ...(permitted("audit:read")
+              ? [["audit", "shield", "审计日志"]]
+              : []),
           ].map(([key, icon, label]) => (
             <button
               key={key}
@@ -708,13 +909,47 @@ export default function Home() {
             <span>{tab === "overview" ? "概览" : titles[tab][0]}</span>
           </div>
           <div className="topbar-status">
+            {user.sessionMethod === "oidc" && authOptions.oidcLogout && (
+              <button
+                className="subtle"
+                onClick={async () => {
+                  try {
+                    const result = await api<{ url: string }>(
+                      "/logout/identity",
+                      "POST",
+                    );
+                    window.location.assign(result.url);
+                  } catch (e) {
+                    setError((e as Error).message);
+                  }
+                }}
+              >
+                退出统一身份
+              </button>
+            )}
+            {user.passwordLogin && (
+              <button
+                className="subtle"
+                onClick={() => {
+                  setError("");
+                  setEditor({ kind: "password" });
+                }}
+              >
+                修改密码
+              </button>
+            )}
             <span className={`dot ${connected ? "green" : ""}`} />
             {connected ? "控制面已连接" : "控制面连接中断"}
             <button
               className="icon-button"
               title="刷新数据"
               aria-label="刷新数据"
-              onClick={() => refresh(user).catch((e) => setError(e.message))}
+              onClick={() =>
+                refresh(user).catch((e) => {
+                  if (e instanceof APIError && e.status === 401) setUser(null);
+                  else setError(e.message);
+                })
+              }
             >
               <Icon name="refresh" size={17} />
             </button>
@@ -737,7 +972,9 @@ export default function Home() {
                 ? addButton("service", "添加应用")
                 : tab === "users"
                   ? addButton("user", "添加成员")
-                  : addButton("site", "接入新站点")}
+                  : tab === "overview"
+                    ? addButton("site", "接入新站点")
+                    : null}
           </div>
           {error && (
             <div className="error-banner" role="alert">
@@ -882,12 +1119,66 @@ export default function Home() {
               )}
             </>
           )}
-          {tab === "users" && (
+          {tab === "bulk" && permitted("applications:manage") && (
+            <BulkApplications
+              key={root ? organization : user.organizationID || "default"}
+              sites={sites}
+              services={services}
+              onChanged={() => refresh(user)}
+            />
+          )}
+          {tab === "agents" && permitted("sites:manage") && (
+            <AgentsPanel
+              key={organization}
+              sites={sites}
+              reload={() => refresh(user)}
+            />
+          )}
+          {tab === "history" && (
+            <MonitoringHistory
+              services={services.filter(
+                (s) =>
+                  s.accessible !== false || permitted("applications:manage"),
+              )}
+            />
+          )}
+          {tab === "sessions" && (
+            <SessionsPanel admin={!!root} onExpired={sessionExpired} />
+          )}
+          {tab === "groups" && permitted("groups:manage") && (
+            <GroupsPanel
+              key={root ? organization : user.organizationID || "default"}
+              organizationID={
+                root ? organization : user.organizationID || "default"
+              }
+              members={users.filter((m) => m.role !== "admin")}
+              sites={sites}
+              services={services}
+            />
+          )}
+          {tab === "administrators" && root && (
+            <AdministratorsPanel
+              members={users}
+              onChanged={() => user && refresh(user)}
+              onExpired={sessionExpired}
+            />
+          )}
+          {tab === "audit" && permitted("audit:read") && <AuditPanel />}
+          {tab === "organizations" && permitted("roles:manage") && (
+            <OrganizationsPanel
+              globalAdmin={root}
+              organizationID={
+                root ? organization : user.organizationID || "default"
+              }
+              onChanged={() => refresh(user)}
+            />
+          )}
+          {tab === "users" && permitted("members:manage") && (
             <>
               <div className="permission-note">
                 <Icon name="shield" />
                 <p>
-                  管理员可管理全部站点。成员仅可查看、检测和打开获授权站点的应用；Agent
+                  全局管理员可管理全部组织；组织角色只在所属组织内生效。成员可通过整站授权或单独应用授权访问；Agent
                   仍会独立检查目标白名单。
                 </p>
               </div>
@@ -897,7 +1188,7 @@ export default function Home() {
                     <tr>
                       <th>成员</th>
                       <th>角色</th>
-                      <th>站点权限</th>
+                      <th>站点 / 应用权限</th>
                       <th className="right">操作</th>
                     </tr>
                   </thead>
@@ -906,6 +1197,14 @@ export default function Home() {
                       <tr key={u.id}>
                         <td>
                           <strong>{u.username}</strong>
+                          <div className="muted small">
+                            {u.disabled ? "已禁用" : "正常"} ·{" "}
+                            {u.identity
+                              ? u.passwordLogin
+                                ? "密码 + OIDC"
+                                : "OIDC"
+                              : "本地密码"}
+                          </div>
                         </td>
                         <td>
                           <span className="role-badge">
@@ -915,16 +1214,89 @@ export default function Home() {
                         <td>
                           {u.role === "admin"
                             ? "全部站点"
-                            : u.siteIDs
+                            : (u.siteIDs || [])
                                 .map(
                                   (id) =>
                                     sites.find((s) => s.id === id)?.name ||
                                     "已删除站点",
                                 )
-                                .join("、") || "暂无授权"}
+                                .join("、") || "无整站授权"}
+                          {u.role !== "admin" && !!u.serviceIDs?.length && (
+                            <div className="muted small">
+                              应用：
+                              {u.serviceIDs
+                                .map(
+                                  (id) =>
+                                    services.find((s) => s.id === id)?.name ||
+                                    "已删除应用",
+                                )
+                                .join("、")}
+                            </div>
+                          )}
                         </td>
                         <td className="right">
-                          {u.role !== "admin" && (
+                          {u.role !== "admin" && (root || !u.roleID) && (
+                            <>
+                              <button
+                                className="subtle"
+                                onClick={() =>
+                                  setEditor({ kind: "grants", user: u })
+                                }
+                              >
+                                编辑权限
+                              </button>
+                              {u.passwordLogin && (
+                                <button
+                                  className="subtle"
+                                  onClick={() =>
+                                    setEditor({ kind: "reset", user: u })
+                                  }
+                                >
+                                  重置密码
+                                </button>
+                              )}
+                              {(authOptions.oidc || u.identity) && (
+                                <button
+                                  className="subtle"
+                                  onClick={() =>
+                                    setEditor({ kind: "identity", user: u })
+                                  }
+                                >
+                                  身份绑定
+                                </button>
+                              )}
+                              <button
+                                className="subtle"
+                                onClick={async () => {
+                                  if (
+                                    !u.disabled &&
+                                    !window.confirm(
+                                      `禁用「${u.username}」将立即撤销全部登录和应用连接。继续？`,
+                                    )
+                                  )
+                                    return;
+                                  try {
+                                    await api(
+                                      `/users/${u.id}/disabled`,
+                                      "PATCH",
+                                      { disabled: !u.disabled },
+                                    );
+                                    await refresh(user);
+                                    setNotice(
+                                      u.disabled
+                                        ? "已启用，请重新登录"
+                                        : "已禁用并撤销访问",
+                                    );
+                                  } catch (e) {
+                                    setError((e as Error).message);
+                                  }
+                                }}
+                              >
+                                {u.disabled ? "启用账号" : "禁用账号"}
+                              </button>
+                            </>
+                          )}
+                          {u.role !== "admin" && (root || !u.roleID) && (
                             <button
                               className="subtle danger"
                               onClick={() => remove("users", u.id, u.username)}
@@ -948,6 +1320,36 @@ export default function Home() {
           </footer>
         </main>
       </div>
+      {editor && (
+        <ResourceEditor
+          editor={editor}
+          oidcIssuer={authOptions.issuer}
+          globalAdmin={!!root}
+          sites={sites.filter(
+            (v) =>
+              !("user" in editor) ||
+              (v.organizationID || "") === (editor.user.organizationID || ""),
+          )}
+          services={services.filter(
+            (v) =>
+              !("user" in editor) ||
+              (v.organizationID || "") === (editor.user.organizationID || ""),
+          )}
+          onClose={() => setEditor(null)}
+          onSaved={async (reauth) => {
+            setEditor(null);
+            if (reauth) {
+              setUser(null);
+              setTab("overview");
+              setProbes({});
+              setNotice("密码已修改，请重新登录");
+            } else {
+              await refresh(user);
+              setNotice("已保存");
+            }
+          }}
+        />
+      )}
       {diagnostic && (
         <Modal
           title={`连接诊断 · ${diagnostic.service.name}`}
@@ -994,6 +1396,11 @@ export default function Home() {
                   <code>{diagnostic.result.requestID}</code>
                 </dd>
               </>
+            )}
+            {diagnostic.result.agentInstanceID && (
+              <p>
+                Agent 实例：<code>{diagnostic.result.agentInstanceID}</code>
+              </p>
             )}
             {diagnostic.result.agentRequestID && (
               <>
@@ -1098,7 +1505,7 @@ export default function Home() {
                 </Field>
                 <Field
                   label="内网地址"
-                  hint="仅填写 HTTP / HTTPS 源地址，例如 http://grafana.internal:3000；DNS 在 Agent 侧解析。"
+                  hint="填写 HTTP / HTTPS 地址，可含已配置的子路径，例如 http://grafana.internal:3000/grafana/；DNS 在 Agent 侧解析。"
                 >
                   <input
                     name="url"
@@ -1107,8 +1514,20 @@ export default function Home() {
                     placeholder="http://10.10.1.20:3000"
                   />
                 </Field>
+                {root && (
+                  <Field
+                    label="自定义访问域名"
+                    hint="可选；仅主机名，不含协议/端口。需要单独配置 DNS 和 TLS。"
+                  >
+                    <input
+                      name="customDomain"
+                      placeholder="reports.example.net"
+                    />
+                  </Field>
+                )}
                 <p className="form-tip">
-                  添加应用后，请确保目标 IP 和端口位于 Agent 白名单内。
+                  添加应用后，请确保目标 IP 和端口位于 Agent
+                  白名单内。路径前缀在公网保留，应用需配置相同子路径。
                 </p>
               </>
             ) : (
@@ -1122,32 +1541,46 @@ export default function Home() {
                     autoComplete="off"
                   />
                 </Field>
-                <Field
-                  label="初始密码"
-                  hint="12–72 字节；请通过安全渠道交给成员。"
-                >
-                  <input
-                    name="password"
-                    type="password"
-                    minLength={12}
-                    maxLength={72}
-                    required
-                    autoComplete="new-password"
-                  />
-                </Field>
-                <fieldset className="grants">
-                  <legend>可访问站点</legend>
-                  {sites.length ? (
-                    sites.map((site) => (
-                      <label key={site.id}>
-                        <input type="checkbox" name="siteIDs" value={site.id} />
-                        {site.name}
-                      </label>
-                    ))
-                  ) : (
-                    <p className="muted">尚无可授权的站点。</p>
-                  )}
-                </fieldset>
+                {authOptions.oidc && (
+                  <Field label="登录方式">
+                    <select
+                      value={memberAuth}
+                      onChange={(e) => setMemberAuth(e.target.value)}
+                    >
+                      <option value="local">本地密码</option>
+                      <option value="oidc">OIDC 统一登录</option>
+                    </select>
+                  </Field>
+                )}
+                {memberAuth === "oidc" && authOptions.oidc ? (
+                  <Field
+                    label="OIDC Subject"
+                    hint="从身份提供方获取 sub，精确区分大小写；不会按邮箱自动绑定。"
+                  >
+                    <input
+                      name="oidcSubject"
+                      required
+                      maxLength={255}
+                      autoComplete="off"
+                    />
+                    <small>Issuer：{authOptions.issuer}</small>
+                  </Field>
+                ) : (
+                  <Field
+                    label="初始密码"
+                    hint="12–72 字节；请通过安全渠道交给成员。"
+                  >
+                    <input
+                      name="password"
+                      type="password"
+                      minLength={12}
+                      maxLength={72}
+                      required
+                      autoComplete="new-password"
+                    />
+                  </Field>
+                )}
+                <Grants sites={sites} services={services} />
               </>
             )}
             {error && (

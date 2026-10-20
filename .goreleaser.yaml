@@ -40,7 +40,9 @@ archives:
       - README.md
       - CHANGELOG.md
       - examples/**
-      - docs/console.png
+      - docs/**
+      - scripts/verify-upgrade.py
+      - scripts/verify-upgrade.sh
 
 checksum:
   name_template: checksums.txt

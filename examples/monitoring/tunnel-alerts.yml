@@ -1,0 +1,38 @@
+groups:
+  - name: tunnel
+    rules:
+      - alert: TunnelServerDown
+        expr: up{job="tunnel"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Tunnel control plane cannot be scraped"
+      - alert: TunnelSiteOffline
+        expr: tunnel_site_online == 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'Site {{ $labels.site_id }} is offline'
+      - alert: TunnelApplicationUnreachable
+        expr: tunnel_service_reachable == 0
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'Application {{ $labels.service_id }} cannot be reached'
+      - alert: TunnelProbeStale
+        expr: time() - tunnel_service_probe_timestamp_seconds > 300
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'Application {{ $labels.service_id }} has stale probe data'
+      - alert: TunnelProxyErrors
+        expr: rate(tunnel_proxy_errors_total[5m]) / clamp_min(rate(tunnel_proxy_requests_total[5m]), 0.01) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "More than 10 percent of proxy requests fail at the transport layer"

@@ -100,3 +100,68 @@ func TestStandaloneAgentDiagnosisWithoutToken(t *testing.T) {
 		t.Fatalf("diagnostic exit/output: %s %v", out, err)
 	}
 }
+
+func TestOperationsConfiguration(t *testing.T) {
+	t.Setenv("TUNNEL_PROBE_INTERVAL_SECONDS", "120")
+	out, err := execute("server", "--probe-interval", "0", "--audit-max-mb", "8", "--audit-backups", "3", "--check-config")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg map[string]any
+	if json.Unmarshal([]byte(out), &cfg) != nil || cfg["probeIntervalSeconds"] != float64(0) || cfg["auditMaxMB"] != float64(8) || cfg["auditBackups"] != float64(3) {
+		t.Fatalf("operations flags not applied: %s", out)
+	}
+	for _, args := range [][]string{{"server", "--probe-interval", "1", "--check-config"}, {"server", "--audit-backups", "21", "--check-config"}, {"server", "--audit-max-mb", "-1", "--check-config"}} {
+		if _, err := execute(args...); err == nil {
+			t.Fatalf("invalid configuration accepted: %v", args)
+		}
+	}
+	t.Setenv("TUNNEL_CONFIG", "")
+	_, err = execute("agent", "--site-id", "test", "--allow", `[{"cidr":"127.0.0.0/8","ports":[80]}]`, "--watch-config")
+	if err == nil || !strings.Contains(err.Error(), "requires --config") {
+		t.Fatalf("watcher should require config: %v", err)
+	}
+}
+
+func TestOIDCConfigPrecedenceAndSecretRedaction(t *testing.T) {
+	t.Setenv("TUNNEL_OIDC_ISSUER", "https://sso.example/realms/test")
+	t.Setenv("TUNNEL_OIDC_CLIENT_ID", "environment-client")
+	t.Setenv("TUNNEL_OIDC_SESSION_MINUTES", "20")
+	t.Setenv("TUNNEL_OIDC_CLIENT_SECRET", "private-secret-never-printed")
+	out, err := execute("server", "--oidc-client-id", "flag-client", "--check-config")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out, "private-secret") || strings.Contains(out, "clientSecret") || !strings.Contains(out, "flag-client") || !strings.Contains(out, "https://sso.example/realms/test") || !strings.Contains(out, `"sessionMinutes": 20`) {
+		t.Fatal("bad OIDC effective config", out)
+	}
+	path := filepath.Join(t.TempDir(), "bad.json")
+	if err = os.WriteFile(path, []byte(`{"oidc":{"issuer":"https://sso.example","clientID":"client","clientSecret":"do-not-accept"}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = execute("server", "--config", path, "--check-config"); err == nil {
+		t.Fatal("config-file secret accepted")
+	}
+}
+
+func TestAuthenticationContextConfiguration(t *testing.T) {
+	t.Setenv("TUNNEL_OIDC_ISSUER", "https://sso.example/realms/test")
+	t.Setenv("TUNNEL_OIDC_CLIENT_ID", "console")
+	t.Setenv("TUNNEL_OIDC_REQUIRED_ACR", "2,3")
+	out, err := execute("server", "--oidc-required-amr", "pwd,otp", "--check-config")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result struct {
+		OIDC struct {
+			ACR []string `json:"requiredACR"`
+			AMR []string `json:"requiredAMR"`
+		} `json:"oidc"`
+	}
+	if err = json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatal(err)
+	}
+	if len(result.OIDC.ACR) != 2 || result.OIDC.ACR[0] != "2" || len(result.OIDC.AMR) != 2 || result.OIDC.AMR[1] != "otp" {
+		t.Fatal("CSV policy configuration failed", out)
+	}
+}

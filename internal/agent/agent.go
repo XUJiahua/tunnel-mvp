@@ -16,7 +16,6 @@ import (
 	"github.com/XUJiahua/tunnel-mvp/internal/config"
 	"github.com/XUJiahua/tunnel-mvp/internal/diagnostics"
 	"github.com/gorilla/websocket"
-	"github.com/rancher/remotedialer"
 )
 
 type rule struct {
@@ -25,6 +24,7 @@ type rule struct {
 	ports  map[string]bool
 }
 type Policy struct {
+	remote   *Policy
 	rules    []rule
 	resolver *net.Resolver
 	siteID   string
@@ -56,6 +56,9 @@ func NewPolicy(rules []config.Rule) (*Policy, error) {
 	return p, nil
 }
 func (p *Policy) allowed(host, port string, ip netip.Addr) bool {
+	return p.allowedLocal(host, port, ip) && (p.remote == nil || p.remote.allowedLocal(host, port, ip))
+}
+func (p *Policy) allowedLocal(host, port string, ip netip.Addr) bool {
 	ip = ip.Unmap()
 	if ip.IsUnspecified() || ip.IsMulticast() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
 		return false
@@ -135,6 +138,12 @@ func (p *Policy) DialContext(ctx context.Context, network, address string) (conn
 	return nil, d
 }
 func Run(ctx context.Context, c config.Agent, token string) error {
+	if c.RemotePolicy {
+		return runRemotePolicy(ctx, c, token, 5*time.Second, 30*time.Second)
+	}
+	return runConfigured(ctx, c, token, nil, "")
+}
+func runConfigured(ctx context.Context, c config.Agent, token string, remote *Policy, policyVersion string) error {
 	if len(token) < 32 {
 		return errors.New("TUNNEL_AGENT_TOKEN must contain the site token")
 	}
@@ -148,11 +157,12 @@ func Run(ctx context.Context, c config.Agent, token string) error {
 	if err != nil {
 		return err
 	}
+	p.remote = remote
 	p.siteID = c.SiteID
 	report, closeReporter := newReporter(ctx, c, token)
 	defer closeReporter()
 	p.report = report
-	slog.Info("agent configuration loaded", "site_id", c.SiteID, "server", c.ServerURL, "allow", c.Allow)
+	slog.Info("agent configuration loaded", "site_id", c.SiteID, "instance_id", c.InstanceID, "server", c.ServerURL, "allow", c.Allow)
 	u, err := config.Origin(c.ServerURL)
 	if err != nil {
 		return err
@@ -166,15 +176,14 @@ func Run(ctx context.Context, c config.Agent, token string) error {
 		u.Scheme = "ws"
 	}
 	u.Path = "/tunnel/connect"
-	headers := http.Header{"Authorization": []string{"Bearer " + token}, "X-Tunnel-Site": []string{c.SiteID}}
+	headers := http.Header{"Authorization": []string{"Bearer " + token}, "X-Tunnel-Site": []string{c.SiteID}, "X-Tunnel-Instance": []string{c.InstanceID}, "X-Tunnel-Version": []string{c.RuntimeVersion}, "X-Tunnel-Policy": []string{policyVersion}}
 	dialer := &websocket.Dialer{Proxy: http.ProxyFromEnvironment, HandshakeTimeout: 15 * time.Second}
 	delay := time.Second
 	for ctx.Err() == nil {
 		var connected atomic.Bool
-		err = remotedialer.ConnectToProxyWithDialer(ctx, u.String(), headers, func(proto, address string) bool { return proto == "tcp" || proto == "tcp4" || proto == "tcp6" }, dialer, p.DialContext, func(_ context.Context, _ *remotedialer.Session) error {
+		err = connectTunnel(ctx, u.String(), headers, dialer, p.DialContext, func() {
 			connected.Store(true)
-			slog.Info("site tunnel connected", "site", c.SiteID)
-			return nil
+			slog.Info("site tunnel connected", "site", c.SiteID, "version", c.RuntimeVersion)
 		})
 		if ctx.Err() != nil {
 			return nil

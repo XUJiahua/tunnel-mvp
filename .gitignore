@@ -12,3 +12,10 @@ playwright-report/
 web/test-results/
 web/playwright-report/
 /dist/
+
+/backups/
+/data-sqlite/
+
+/data-oidc/
+
+__pycache__/

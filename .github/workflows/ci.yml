@@ -23,16 +23,159 @@ jobs:
           cache-dependency-path: web/pnpm-lock.yaml
       - run: make build
       - run: make test
+      - name: Verify published v0.1.1 upgrade and rollback
+        run: bash scripts/verify-upgrade.sh bin/tunnel "$RUNNER_TEMP/tunnel-upgrade"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: upgrade-v0.1.1-report
+          path: ${{ runner.temp }}/tunnel-upgrade/report.json
       - run: pnpm exec playwright install --with-deps chromium
         working-directory: web
       - run: pnpm run test:e2e
         working-directory: web
+      - run: pnpm run test:e2e
+        working-directory: web
+        env:
+          TUNNEL_TEST_STORAGE: sqlite
       - name: Validate GoReleaser configuration
         uses: goreleaser/goreleaser-action@v7
         with:
-          version: v2.18.3
+          version: v2.17.1
           args: check
       - uses: actions/upload-artifact@v4
         with:
           name: tunnel-linux-amd64
           path: bin/tunnel
+
+  cross-build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        goos: [linux, darwin, windows]
+        goarch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.2'
+          cache: true
+      - name: Compile pure Go SQLite and platform file locks
+        env:
+          CGO_ENABLED: '0'
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          go build -trimpath -o "$RUNNER_TEMP/tunnel-cross-check" ./cmd/tunnel
+          go -C examples/oidc-app build -trimpath -o "$RUNNER_TEMP/oidc-app-cross-check" .
+
+  keycloak-e2e:
+    needs: verify
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        storage: [json, sqlite]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.2'
+          cache: true
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: web/package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: actions/download-artifact@v4
+        with:
+          name: tunnel-linux-amd64
+          path: bin
+      - run: chmod +x bin/tunnel
+      - run: pnpm install --frozen-lockfile
+        working-directory: web
+      - run: pnpm exec playwright install --with-deps chromium
+        working-directory: web
+      - name: Prepare verified Keycloak distribution
+        run: bash scripts/prepare-keycloak-e2e.sh "$RUNNER_TEMP/tunnel-keycloak"
+      - name: Verify real IdP, OTP, Agent and back-channel logout
+        run: pnpm exec playwright test tests/keycloak.spec.ts
+        working-directory: web
+        env:
+          KEYCLOAK_HOME: ${{ runner.temp }}/tunnel-keycloak/server
+          TUNNEL_TEST_STORAGE: ${{ matrix.storage }}
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: keycloak-e2e-${{ matrix.storage }}-failure
+          path: web/test-results
+
+  candidate-packages:
+    # Candidate archives are review artifacts. This job cannot push tags or
+    # publish a Release, and only runs after the complete integration gates.
+    if: github.event_name == 'pull_request' && github.base_ref == 'main' && startsWith(github.head_ref, 'release/')
+    needs: [verify, cross-build, keycloak-e2e]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.2'
+          cache: true
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: web/package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - uses: goreleaser/goreleaser-action@v7
+        with:
+          version: v2.17.1
+          install-only: true
+      - name: Prepare local candidate tag without publishing
+        env:
+          CANDIDATE_BRANCH: ${{ github.head_ref }}
+        run: |
+          candidate_tag="${CANDIDATE_BRANCH#release/}"
+          [[ "$candidate_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+$ ]]
+          if git rev-parse --verify "refs/tags/$candidate_tag" >/dev/null 2>&1; then
+            test "$(git rev-parse "refs/tags/$candidate_tag^{commit}")" = "$(git rev-parse HEAD)"
+          else
+            git tag "$candidate_tag"
+          fi
+          printf 'CANDIDATE_TAG=%s\n' "$candidate_tag" >> "$GITHUB_ENV"
+      - name: Build all candidate packages without publishing
+        run: goreleaser release --skip=publish --clean --parallelism 1
+        env:
+          NEXT_TELEMETRY_DISABLED: '1'
+      - name: Verify matrix, checksums, complete archives and operations content
+        run: python3 scripts/verify-release.py dist --version "${CANDIDATE_TAG#v}"
+      - name: Exercise actual packaged candidate with published v0.1.1
+        run: |
+          mkdir "$RUNNER_TEMP/candidate-extracted"
+          tar -xzf "dist/tunnel_${CANDIDATE_TAG#v}_linux_amd64.tar.gz" -C "$RUNNER_TEMP/candidate-extracted" tunnel
+          bash scripts/verify-upgrade.sh "$RUNNER_TEMP/candidate-extracted/tunnel" "$RUNNER_TEMP/candidate-upgrade"
+          cp "$RUNNER_TEMP/candidate-upgrade/report.json" dist/upgrade-v0.1.1-report.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: single-instance-candidate-${{ github.event.pull_request.head.sha }}
+          retention-days: 14
+          if-no-files-found: error
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/checksums.txt
+            dist/upgrade-v0.1.1-report.json

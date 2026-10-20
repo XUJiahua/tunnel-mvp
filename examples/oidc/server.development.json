@@ -1,0 +1,11 @@
+{
+  "listen": "127.0.0.1:8080",
+  "publicURL": "http://localhost:8080",
+  "accessURL": "http://apps.localhost:8080",
+  "dataDir": "data-oidc",
+  "oidc": {
+    "issuer": "http://localhost:8081/realms/tunnel",
+    "clientID": "tunnel-console",
+    "sessionMinutes": 15
+  }
+}

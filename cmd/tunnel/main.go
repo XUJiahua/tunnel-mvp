@@ -90,9 +90,23 @@ func newRootCommand() *cobra.Command {
 		defer s.Close()
 		return s.Run(cmd.Context())
 	}}
+	server.Flags().StringSlice("oidc-required-acr", nil, "Accepted OIDC acr values; at least one must match when configured")
+	server.Flags().StringSlice("oidc-required-amr", nil, "Required OIDC amr methods; every configured value must be present")
+	server.Flags().Bool("keycloak-sync-enabled", false, "Check Keycloak user status for OIDC sessions")
+	server.Flags().Bool("keycloak-sync-subject-user-id", false, "Explicitly attest OIDC sub equals the Keycloak user ID")
+	server.Flags().String("keycloak-sync-client-id", "", "Least-privilege service client ID; secret uses TUNNEL_KEYCLOAK_SYNC_CLIENT_SECRET")
+	server.Flags().Int("keycloak-sync-poll", 0, "Active OIDC user polling interval in seconds")
+	server.Flags().Int("keycloak-sync-max-stale", 0, "Maximum unverified OIDC user status age in seconds")
+	server.Flags().String("oidc-issuer", "", "OIDC issuer URL; HTTPS except loopback")
+	server.Flags().String("oidc-client-id", "", "OIDC client ID; secret uses TUNNEL_OIDC_CLIENT_SECRET only")
+	server.Flags().Int("oidc-session-minutes", 0, "Maximum OIDC local session duration (1–720 minutes)")
+	server.Flags().Int("probe-interval", 60, "Automatic application health probe interval in seconds; 0 disables")
+	server.Flags().Int("audit-max-mb", 20, "Audit file rotation size in MiB")
+	server.Flags().Int("audit-backups", 5, "Number of rotated audit files to retain")
 	server.Flags().String("listen", ":8080", "HTTP listen address")
 	server.Flags().String("public-url", "http://localhost:8080", "Public console origin")
 	server.Flags().String("access-url", "http://apps.localhost:8080", "Application domain origin")
+	server.Flags().String("storage", "json", "State storage backend: json or sqlite")
 	server.Flags().String("data-dir", "data", "Persistent state and audit directory")
 	server.Flags().String("admin-username", "admin", "First-start administrator username")
 	server.Flags().Bool("check-config", false, "Validate and print effective configuration without starting")
@@ -101,6 +115,7 @@ func newRootCommand() *cobra.Command {
 		if err != nil {
 			return err
 		}
+		c.RuntimeVersion = version
 		logging(c.Logging)
 		if _, err = agent.NewPolicy(c.Allow); err != nil {
 			return err
@@ -109,11 +124,26 @@ func newRootCommand() *cobra.Command {
 		if check {
 			return output(cmd, c)
 		}
+		watch, _ := cmd.Flags().GetBool("watch-config")
+		if watch {
+			if path == "" && os.Getenv("TUNNEL_CONFIG") == "" {
+				return fmt.Errorf("--watch-config requires --config or TUNNEL_CONFIG")
+			}
+			return agent.RunWatched(cmd.Context(), c, os.Getenv("TUNNEL_AGENT_TOKEN"), func() (config.Agent, error) {
+				next, err := config.AgentFrom(path, cmd.Flags())
+				next.RuntimeVersion = version
+				return next, err
+			})
+		}
 		return agent.Run(cmd.Context(), c, os.Getenv("TUNNEL_AGENT_TOKEN"))
 	}}
 	agentCommand.PersistentFlags().String("server-url", "http://localhost:8080", "Public control plane origin")
+	agentCommand.PersistentFlags().Bool("remote-policy", false, "Opt in to remote policy narrowing within local allow rules")
+	agentCommand.PersistentFlags().String("instance-id", "", "Registered Agent instance ID; empty selects legacy site-token mode")
 	agentCommand.PersistentFlags().String("site-id", "", "Registered site ID")
 	agentCommand.PersistentFlags().String("allow", "", "Agent ACL rules as a JSON array (or TUNNEL_ALLOW)")
+	addUpgradeCommands(agentCommand, &path)
+	agentCommand.Flags().Bool("watch-config", false, "Reload valid ACL file changes every 2s; reconnects the tunnel")
 	agentCommand.Flags().Bool("check-config", false, "Validate and print effective configuration without starting")
 	var target string
 	diagnose := &cobra.Command{Use: "diagnose", Short: "Test a target using local Agent DNS/ACL/TCP/HTTP (no token needed)", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
@@ -137,6 +167,6 @@ func newRootCommand() *cobra.Command {
 	diagnose.Flags().StringVar(&target, "target", "", "HTTP/HTTPS origin to diagnose")
 	_ = diagnose.MarkFlagRequired("target")
 	agentCommand.AddCommand(diagnose)
-	root.AddCommand(server, agentCommand, &cobra.Command{Use: "version", Short: "Print build version", Args: cobra.NoArgs, Run: func(cmd *cobra.Command, _ []string) { fmt.Fprintln(cmd.OutOrStdout(), "tunnel "+build) }})
+	root.AddCommand(releaseKeyCommand(), releaseManifestCommand(), storageCommand(&path), server, agentCommand, &cobra.Command{Use: "version", Short: "Print build version", Args: cobra.NoArgs, Run: func(cmd *cobra.Command, _ []string) { fmt.Fprintln(cmd.OutOrStdout(), "tunnel "+build) }})
 	return root
 }

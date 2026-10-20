@@ -16,15 +16,26 @@ import (
 func (s *Server) serviceURL(id string) *url.URL {
 	u := *s.access
 	u.Host = id + "." + s.access.Host
+	if svc, ok := s.store.service(id); ok && svc.CustomDomain != "" {
+		u.Host = customHost(svc.CustomDomain, s.access)
+	}
 	return &u
 }
 func (s *Server) launch(w http.ResponseWriter, r *http.Request, u User) {
+	s.accessMu.RLock()
+	defer s.accessMu.RUnlock()
+	fresh, _, authenticated := s.currentUser(r)
+	if !authenticated {
+		fail(w, 401, "sign in required")
+		return
+	}
+	u = fresh
 	svc, ok := s.store.service(r.PathValue("id"))
-	if !ok || !canAccess(u, svc.SiteID) {
+	if !ok || !canAccessService(u, svc) {
 		fail(w, 404, "service not found")
 		return
 	}
-	if !s.tunnel.HasSession(svc.SiteID) {
+	if !s.siteOnline(svc.SiteID) {
 		fail(w, 503, "site is offline")
 		return
 	}
@@ -47,31 +58,28 @@ func (s *Server) validGrant(g grant, serviceID string) (User, bool) {
 	s.auth.mu.Lock()
 	sess, ok := s.auth.sessions[g.SessionKey]
 	s.auth.mu.Unlock()
-	if !ok || time.Now().After(sess.Expires) {
+	if !ok || time.Now().After(sess.Expires) || !s.identitySessionAllowed(sess) {
 		return User{}, false
 	}
 	u, ok := s.store.user(sess.UserID)
-	return u, ok
+	return u, ok && !u.Disabled
 }
 func (s *Server) gateway(w http.ResponseWriter, r *http.Request) {
+	s.accessMu.RLock()
+	locked := true
+	defer func() {
+		if locked {
+			s.accessMu.RUnlock()
+		}
+	}()
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Referrer-Policy", "no-referrer")
-	suffix := "." + s.access.Host
-	host := strings.ToLower(r.Host)
-	if !strings.HasSuffix(host, strings.ToLower(suffix)) {
-		http.NotFound(w, r)
-		return
-	}
-	id := strings.TrimSuffix(host, strings.ToLower(suffix))
-	if strings.Contains(id, ".") {
-		http.NotFound(w, r)
-		return
-	}
-	svc, ok := s.store.service(id)
+	svc, ok := s.serviceForHost(r.Host)
 	if !ok {
 		http.NotFound(w, r)
 		return
 	}
+	id := svc.ID
 	if r.URL.Path == "/_tunnel/entry" {
 		if r.Method != "GET" {
 			fail(w, 405, "GET required")
@@ -83,7 +91,7 @@ func (s *Server) gateway(w http.ResponseWriter, r *http.Request) {
 		delete(s.auth.tickets, key)
 		s.auth.mu.Unlock()
 		u, valid := s.validGrant(g, id)
-		if !found || !valid || !canAccess(u, svc.SiteID) {
+		if !found || !valid || !canAccessService(u, svc) {
 			fail(w, 401, "access ticket expired or invalid; reopen from console")
 			return
 		}
@@ -94,7 +102,7 @@ func (s *Server) gateway(w http.ResponseWriter, r *http.Request) {
 		s.auth.access[digest(token)] = g
 		s.auth.mu.Unlock()
 		http.SetCookie(w, &http.Cookie{Name: accessCookie, Value: token, Path: "/", HttpOnly: true, Secure: s.secure, SameSite: http.SameSiteLaxMode, MaxAge: 3600})
-		http.Redirect(w, r, "/", http.StatusSeeOther)
+		http.Redirect(w, r, mountPath(svc.URL), http.StatusSeeOther)
 		return
 	}
 	c, err := r.Cookie(accessCookie)
@@ -106,23 +114,34 @@ func (s *Server) gateway(w http.ResponseWriter, r *http.Request) {
 	g, ok := s.auth.access[digest(c.Value)]
 	s.auth.mu.Unlock()
 	u, valid := s.validGrant(g, id)
-	if !ok || !valid || !canAccess(u, svc.SiteID) {
+	if !ok || !valid || !canAccessService(u, svc) {
 		fail(w, 401, "access expired; reopen from console")
 		return
 	}
-	if !s.tunnel.HasSession(svc.SiteID) {
+	if !s.siteOnline(svc.SiteID) {
 		fail(w, 503, "site is offline")
 		return
 	}
+	if !s.mountGuard(w, r, svc) {
+		return
+	}
+	ctx, release := s.trackRequest(r.Context(), u, g)
+	defer release()
+	r = r.WithContext(ctx)
 	target, _ := url.Parse(svc.URL)
-	transport := s.transport(svc.SiteID)
-	defer transport.CloseIdleConnections()
-	public := s.serviceURL(id)
+	upstreamOrigin := *target
+	upstreamOrigin.Path = ""
+	upstreamOrigin.RawPath = ""
+	transport := s.serviceTransport(svc, g.SessionKey)
+	s.accessMu.RUnlock()
+	locked = false
+	s.stats.requests.Add(1)
+	public := &url.URL{Scheme: s.access.Scheme, Host: r.Host}
 	proxy := &httputil.ReverseProxy{
 		Transport: transport, FlushInterval: -1,
 		ErrorLog: slog.NewLogLogger(slog.Default().With("site_id", svc.SiteID, "service_id", svc.ID, "target", svc.URL).Handler(), slog.LevelWarn),
 		Rewrite: func(pr *httputil.ProxyRequest) {
-			pr.SetURL(target)
+			pr.SetURL(&upstreamOrigin)
 			pr.Out.Header.Del("X-Forwarded-For")
 			pr.Out.Header.Del("X-Forwarded-Host")
 			pr.Out.Header.Del("X-Forwarded-Proto")
@@ -132,7 +151,12 @@ func (s *Server) gateway(w http.ResponseWriter, r *http.Request) {
 			pr.Out.Header.Set("X-Forwarded-Proto", public.Scheme)
 			// Translate same-application origins for upstream CSRF and WebSocket checks.
 			if pr.Out.Header.Get("Origin") == public.String() {
-				pr.Out.Header.Set("Origin", target.String())
+				pr.Out.Header.Set("Origin", upstreamOrigin.String())
+			}
+			if ref, err := url.Parse(pr.Out.Header.Get("Referer")); err == nil && ref.Host == public.Host && ref.Scheme == public.Scheme {
+				ref.Host = target.Host
+				ref.Scheme = target.Scheme
+				pr.Out.Header.Set("Referer", ref.String())
 			}
 			pr.Out.Header.Del("Cookie")
 			for _, c := range pr.In.Cookies() {
@@ -162,69 +186,94 @@ func (s *Server) gateway(w http.ResponseWriter, r *http.Request) {
 				}
 				resp.Header.Add("Set-Cookie", c.String())
 			}
-			if resp.Header.Get("Access-Control-Allow-Origin") == target.String() {
+			if resp.Header.Get("Access-Control-Allow-Origin") == upstreamOrigin.String() {
 				resp.Header.Set("Access-Control-Allow-Origin", public.String())
 			}
-			resp.Header.Set("Referrer-Policy", "no-referrer")
+			// Preserve same-application CSRF referers; never send them cross-origin.
+			resp.Header.Set("Referrer-Policy", "same-origin")
 			return nil
 		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			s.stats.errors.Add(1)
 			s.proxyFailure(w, u, svc, err)
 		},
 	}
 	s.audit("proxy_request", u.Username, svc.SiteID, svc.ID)
 	proxy.ServeHTTP(w, r)
 }
-func (s *Server) transport(siteID string) *http.Transport {
-	remote := s.tunnel.Dialer(siteID)
+func (s *Server) transport(siteID string, serviceIDs ...string) *http.Transport {
+	serviceID := ""
+	if len(serviceIDs) > 0 {
+		serviceID = serviceIDs[0]
+	}
 	return &http.Transport{Proxy: nil, DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 		ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
-		return remote(ctx, network, addr)
+		return s.dialSite(ctx, siteID, serviceID, network, addr)
 	}, TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12}, TLSHandshakeTimeout: 10 * time.Second, ResponseHeaderTimeout: 30 * time.Second, IdleConnTimeout: 30 * time.Second, MaxIdleConnsPerHost: 4, ForceAttemptHTTP2: false}
 }
 func (s *Server) probe(w http.ResponseWriter, r *http.Request, u User) {
+	s.accessMu.RLock()
+	fresh, key, valid := s.currentUser(r)
+	if !valid {
+		s.accessMu.RUnlock()
+		fail(w, 401, "sign in required")
+		return
+	}
+	u = fresh
 	svc, ok := s.store.service(r.PathValue("id"))
-	if !ok || !canAccess(u, svc.SiteID) {
+	if !ok || (!canAccessService(u, svc) && !canManage(u, svc.OrganizationID, "applications:manage")) {
+		s.accessMu.RUnlock()
 		fail(w, 404, "service not found")
 		return
 	}
+	ctx, release := s.trackRequest(r.Context(), u, grant{SessionKey: key, ServiceID: svc.ID, Expires: time.Now().Add(14 * time.Second)})
+	s.accessMu.RUnlock()
+	defer release()
+	report := s.checkService(ctx, svc)
+	s.saveReport(svc, report)
+	event := "probe"
+	if !report.Reachable {
+		event = "probe_failed"
+	}
+	s.recordDiagnostic(event, u, report)
+	w.Header().Set("X-Tunnel-Request-ID", report.RequestID)
+	jsonOut(w, 200, report)
+}
+func (s *Server) checkService(parent context.Context, svc Service) probeReport {
 	report := newReport(svc)
 	start := time.Now()
-	w.Header().Set("X-Tunnel-Request-ID", report.RequestID)
-	finish := func() {
-		report.LatencyMs = time.Since(start).Milliseconds()
-		event := "probe"
-		if !report.Reachable {
-			event = "probe_failed"
-		}
-		s.recordDiagnostic(event, u, report)
-		jsonOut(w, 200, report)
-	}
-	if !s.tunnel.HasSession(svc.SiteID) {
+	defer func() { s.stats.probes.Add(1) }()
+	if !s.siteOnline(svc.SiteID) {
 		report.Failure = diagnostics.New("site_offline", "tunnel", "site Agent is not connected")
-		finish()
-		return
+		return report
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 14*time.Second)
+	ctx, cancel := context.WithTimeout(parent, 14*time.Second)
 	defer cancel()
-	t := s.transport(svc.SiteID)
-	defer t.CloseIdleConnections()
+	t := s.serviceTransport(svc)
 	client := &http.Client{Transport: t, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	req, err := http.NewRequestWithContext(ctx, "HEAD", svc.URL, nil)
+	req, err := http.NewRequestWithContext(ctx, func() string {
+		if svc.HealthMethod != "" {
+			return svc.HealthMethod
+		}
+		return "HEAD"
+	}(), probeURL(svc), nil)
 	if err != nil {
 		report.Failure = diagnostics.New("invalid_target", "configuration", err.Error())
-		finish()
-		return
+		return report
 	}
 	resp, err := client.Do(req)
+	report.LatencyMs = time.Since(start).Milliseconds()
 	if err != nil {
 		report.Failure = s.describeFailure(svc.SiteID, err)
-		finish()
-		return
+		return report
 	}
 	defer resp.Body.Close()
 	report.Reachable = true
 	report.Status = resp.StatusCode
-	finish()
+	report.Healthy = resp.StatusCode >= 200 && resp.StatusCode < 400
+	if svc.HealthExpectedStatus != 0 {
+		report.Healthy = resp.StatusCode == svc.HealthExpectedStatus
+	}
+	return report
 }

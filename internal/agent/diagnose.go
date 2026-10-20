@@ -20,7 +20,7 @@ type Diagnosis struct {
 
 // Diagnose checks the actual Agent DNS/ACL/TCP path without needing a tunnel or token.
 func Diagnose(ctx context.Context, c config.Agent, target string) (Diagnosis, error) {
-	origin, err := config.Origin(target)
+	origin, err := config.TargetURL(target)
 	if err != nil {
 		return Diagnosis{}, err
 	}

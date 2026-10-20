@@ -1207,10 +1207,12 @@ td code {
     order: 3;
     width: 100%;
     margin: 6px 0 0;
-    justify-content: space-between;
+    justify-content: flex-start;
+    flex-wrap: wrap;
+    max-width: 100%;
   }
   nav button {
-    padding: 10px 16px;
+    padding: 10px 12px;
   }
   .profile strong {
     font-size: 11px;
@@ -1363,3 +1365,69 @@ td code {
   color: #8a594b;
   line-height: 1.7;
 }
+
+.audit-filters {
+  display: flex;
+  gap: 16px;
+  align-items: end;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+.audit-filters .field {
+  margin: 0;
+  flex: 1;
+  min-width: 180px;
+}
+.grants {
+  max-height: 240px;
+  overflow: auto;
+}
+
+.oidc-login {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+  margin-top: 14px;
+}
+
+.session-agent {
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.group-editor {
+  background: #fff;
+  border: 1px solid #e2e8dd;
+  padding: 24px;
+  border-radius: 10px;
+  margin: 20px 0;
+}
+.invite-link {
+  overflow-wrap: anywhere;
+  font-family: monospace;
+}
+.invitation-page {
+  max-width: 600px;
+  margin: 8vh auto;
+  padding: 20px;
+}
+
+.history-controls { display:flex; align-items:end; gap:16px; flex-wrap:wrap; margin-bottom:20px; }
+.history-controls .field { flex:1; min-width:160px; }
+.history-chart { width:100%; max-height:260px; color:var(--muted); margin:20px 0; background:var(--surface, #fff); border-radius:12px; }
+
+.audit-filters { flex-wrap:wrap; }
+.audit-filters .field { min-width:150px; }
+
+.agent-panel { display: grid; gap: 18px; }
+.agent-panel > p { color: var(--muted); line-height: 1.65; }
+.agent-panel form { display: grid; gap: 12px; padding: 20px; border: 1px solid var(--border); border-radius: 12px; background: white; }
+.agent-panel form .primary { justify-self: start; }
+.agent-panel td small { display: block; margin-top: 5px; overflow-wrap: anywhere; }
+.agent-panel td:last-child { min-width: 230px; }
+.agent-panel td button { margin: 3px; }
+.agent-panel textarea { width: 100%; min-height: 160px; font-family: monospace; }
+.agent-panel pre { overflow: auto; max-width: 100%; white-space: pre-wrap; overflow-wrap: anywhere; }
