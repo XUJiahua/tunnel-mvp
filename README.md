@@ -12,7 +12,7 @@
 
 - [操作手册](docs/operations.md)：升级、资源管理、权限、密码、ACL 重载、监控与备份。
 - [设计说明](docs/design/operations-and-access.md)：授权语义、会话撤销、连接池隔离和兼容性。
-- [存储设计](docs/design/storage.md)与[迁移/备份恢复手册](docs/storage-operations.md)：JSON / SQLite、目录锁与离线维护。
+- [存储设计](docs/design/storage.md)与[迁移/备份恢复手册](docs/storage-operations.md)：JSON / SQLite、目录锁与离线维护；[PostgreSQL 操作](docs/postgres-operations.md)提供 HA-1 单活数据库后端。
 - [OIDC 设计](docs/design/oidc.md)与[统一登录/禁用手册](docs/oidc-operations.md)：显式身份绑定、Keycloak 接入和即时撤销边界。
 - [会话生命周期设计](docs/design/session-lifecycle.md)与[设备/退出/恢复手册](docs/session-operations.md)：逐设备撤销、真实 Keycloak/OTP 验证和离线管理员恢复。
 - [用户组/邀请设计](docs/design/groups-invitations.md)与[操作手册](docs/groups-operations.md)：共享授权、一次性链接及设密。
@@ -59,7 +59,7 @@
 - 登录设备列表、逐会话撤销、离线管理员恢复；OIDC back-channel/RP 退出及可选 acr/amr 策略，真实 Keycloak + OTP 双后端端到端测试。
 - Agent `--watch-config` 校验后自动重载本地 ACL，通过重连撤销旧连接。
 - 按应用隔离的 HTTP 连接池、可配置业务健康检查、持久化历史与图表、状态快照、Prometheus 指标与告警配置示例。
-- JSON（默认）/ SQLite 状态存储、数据目录进程锁、离线迁移和带校验和的跨后端备份恢复。
+- JSON（默认）/ SQLite / PostgreSQL（单活）状态存储、数据目录进程锁、离线迁移和带校验和的跨后端备份恢复。
 - 用户组授权并集、一次性成员邀请、多管理员及最后恢复管理员保护。
 - JSONL 审计日志、大小轮转、全部保留文件索引及分页；密码 bcrypt、Agent 令牌 SHA-256 存储。
 - Docker 多阶段构建、Compose、GitHub Actions 构建与测试。
@@ -298,7 +298,7 @@ Compose 默认只将 Go 的 8080 绑定到公网机器的回环地址，由宿�
 
 **当前版本边界：**
 
-- 单控制面进程、单数据目录；没有多实例共享存储、HA 或跨网关隧道路由。新版本会拒绝第二个进程打开同一数据目录；不要使用多主机共享文件系统。SQLite 不提供控制面 HA。
+- 单控制面进程、单数据目录；PostgreSQL 已支持独立存储客户端事务，但 Server 仍强制单活，尚无控制面 HA 或跨网关隧道路由。新版本会拒绝第二个进程打开同一数据目录；不要使用多主机共享文件系统。SQLite 不提供控制面 HA。
 - 用户 / 访问会话与短期票据在内存中，重启 Server 后需重新登录；用户、站点、服务配置保留。
 - 授权在每个 HTTP 请求及 WebSocket Upgrade 时检查；退出、密码变更、授权收回或到期主动关闭受影响的请求。删除站点 / 轮换令牌会关闭整个站点隧道。
 - 已支持成员授权编辑、自助改密和管理员重置成员密码；支持显式 OIDC 绑定与账号禁用；已支持离线管理员恢复、OIDC back-channel/RP 退出和可选 acr/amr 策略；支持用户组与一次性成员邀请；已支持组织隔离、自定义管理角色和有界委派；单成员仍只属于一个组织，尚无组织级 IdP。
@@ -329,7 +329,7 @@ Go 集成测试使用真正的 Agent、WebSocket 隧道与本地 HTTP / HTTPS �
 cmd/tunnel/           server / agent 命令入口
 internal/agent/       ACL、DNS、远程 Dial 与自动重连
 internal/control/     HTTP API、认证授权、隧道、应用代理
-internal/state/       Repository、JSON/SQLite、目录锁、迁移与备份恢复
+internal/state/       Repository、JSON/SQLite/PostgreSQL、目录锁、迁移与备份恢复
 internal/config/      JSON 配置
 internal/web/         go:embed 前端资源
 web/                  Next.js App Router 控制台源码
@@ -380,3 +380,5 @@ SQLite 增量持久化：[设计](docs/design/incremental-sqlite.md) · [操作�
 审计增量轮转：[设计](docs/design/audit-rotation.md) · [升级与故障操作](docs/audit-rotation-operations.md)。
 
 Keycloak 禁用自动撤销：[设计](docs/design/keycloak-session-sync.md) · [配置与演练](docs/keycloak-sync-operations.md)。
+
+PostgreSQL（HA-1）：[事务与单活隔离设计](docs/design/postgres-repository.md) · [迁移/恢复操作](docs/postgres-operations.md)。会话、OIDC、隧道与运行记录仍需按后续 HA 阶段共享。

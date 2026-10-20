@@ -9,11 +9,12 @@
 | 已发布 v0.1.1 | 初始 MVP；commit 0202249，尚未发布后续能力 |
 | main：#24 整合 | #1–#23 全部代码和候选包验证；merge df056a2 |
 | main：#25 公网模拟 | merge 847bc4b；公网 HTTPS/WSS 模拟和证据通过，无远端发布标签 |
-| 本批存储查询 | 基于 main 继续实现阶段四，验证结果以本批 PR 为准 |
+| main：#26 存储查询 | merge 4eb4a66；阶段四索引成员关系、登录/目录定向查询及分页已合入 |
+| 本批 HA-1 | PostgreSQL Repository/单活运行及迁移恢复，验证结果以本批 PR 为准 |
 
 以上是记录时状态；后续合并或发布必须更新本表，不能把旧状态描述当成实时查询结果。#1–#22 的逐层审阅记录保留；不得只根据 #22 的 diff 判断完整版本内容。
 
-当前授权 schema/backup v10，接受旧 backup v1–v9；monitor schema v3 独立维护。GoReleaser 固定 2.17.1。JSON 默认、SQLite 可选，均为单控制面；用户会话/票据在内存，多 Agent 不等于控制面 HA。
+当前授权 schema/backup v10，接受旧 backup v1–v9；monitor schema v3 独立维护。GoReleaser 固定 2.17.1。JSON 默认、SQLite 与 PostgreSQL 可选，均为单活控制面；用户会话/票据在内存，多 Agent 不等于控制面 HA。
 
 ## 阶段一：收敛
 
@@ -45,6 +46,6 @@
 | 六：组织身份 | 多组织成员、组织级 IdP、subject 桥接、设备风险策略 | 身份与组织成员关系隔离、迁移和即时撤销 |
 | 七：平台生产 | macOS/Windows 服务/升级实机、AD/NTLM/更多 IdP、WAN/TLS 容量、独立安全审查 | 发布支持矩阵、目标 SLO 和可复现实测记录 |
 
-阶段三的公网模拟及本地 SSE 已验收，可继续阶段四代码；真实物理内网、Named Tunnel SSE 和生产容量仍单列于 [公网模拟边界](cloudflare-simulation.md)。阶段三是外部部署验收门槛，不代表后续代码已经完成。无法访问目标环境时明确记录阻塞；不通过共享 SQLite、删除目录锁或粘性路由跳过 HA 工作。
+阶段三的公网模拟及本地 SSE 已验收，阶段四 PR #26 已合入，继续 HA-1 代码；真实物理内网、Named Tunnel SSE 和生产容量仍单列于 [公网模拟边界](cloudflare-simulation.md)。阶段三是外部部署验收门槛，不代表后续代码已经完成。无法访问目标环境时明确记录阻塞；不通过共享 SQLite、删除目录锁或粘性路由跳过 HA 工作。
 
 SSH/RDP/数据库浏览器网关、UDP/P2P/QUIC、DNS/证书自动管理独立立项，不是本轮 HTTP 多站点交付的前置条件。

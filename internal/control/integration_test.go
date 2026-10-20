@@ -24,6 +24,7 @@ import (
 
 	"github.com/XUJiahua/tunnel-mvp/internal/agent"
 	"github.com/XUJiahua/tunnel-mvp/internal/config"
+	"github.com/XUJiahua/tunnel-mvp/internal/testpostgres"
 	"github.com/gorilla/websocket"
 )
 
@@ -39,6 +40,9 @@ type fixture struct {
 func setup(t *testing.T) *fixture {
 	t.Helper()
 	h := httptest.NewUnstartedServer(nil)
+	if os.Getenv("TUNNEL_TEST_STORAGE") == "postgres" {
+		t.Setenv("TUNNEL_POSTGRES_DSN", testpostgres.Database(t))
+	}
 	dir := t.TempDir()
 	s, err := New(config.Server{PublicURL: "http://" + h.Listener.Addr().String(), AccessURL: "http://apps.localhost:" + strconv.Itoa(h.Listener.Addr().(*net.TCPAddr).Port), DataDir: dir, Storage: os.Getenv("TUNNEL_TEST_STORAGE")}, testPassword)
 	if err != nil {

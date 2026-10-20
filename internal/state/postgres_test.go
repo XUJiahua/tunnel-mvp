@@ -387,3 +387,76 @@ func TestPostgresDSNRedaction(t *testing.T) {
 		t.Fatal("DSN exposed", e)
 	}
 }
+
+func TestPostgresConcurrentLastAdminProtection(t *testing.T) {
+	dsn := testpostgres.Database(t)
+	initial := sample(t)
+	initial.Users[1].Role = "admin"
+	p := mustPostgres(t, dsn, initial)
+	q := mustPostgres(t, dsn, State{})
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	for i, client := range []*PostgresRepository{p, q} {
+		go func(i int, c *PostgresRepository) {
+			<-start
+			results <- c.Update(func(s *State) error { s.Users[i].Disabled = true; return nil })
+		}(i, client)
+	}
+	close(start)
+	successes := 0
+	for range 2 {
+		if <-results == nil {
+			successes++
+		}
+	}
+	final := snapshotPostgres(t, p)
+	enabled := 0
+	for _, u := range final.State.Users {
+		if u.Role == "admin" && !u.Disabled {
+			enabled++
+		}
+	}
+	if successes != 1 || enabled != 1 || final.Revision != 1 {
+		t.Fatal("concurrent writes removed last administrator", successes, enabled, final.Revision)
+	}
+}
+func TestPostgresInitializationAndSchemaRefusal(t *testing.T) {
+	dsn := testpostgres.Database(t)
+	initial := sample(t)
+	start := make(chan struct{})
+	results := make(chan *PostgresRepository, 2)
+	errs := make(chan error, 2)
+	var calls atomic.Int32
+	for range 2 {
+		go func() {
+			<-start
+			p, e := OpenPostgres(context.Background(), dsn, func() (State, error) { calls.Add(1); return Clone(initial), nil })
+			results <- p
+			errs <- e
+		}()
+	}
+	close(start)
+	for range 2 {
+		p := <-results
+		err := <-errs
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = p.Close() })
+	}
+	if calls.Load() != 1 {
+		t.Fatal("initializer replayed", calls.Load())
+	}
+	db, e := sql.Open("postgres", dsn)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer db.Close()
+	if _, e = db.Exec(`UPDATE tunnel_state.meta SET schema_version=999`); e != nil {
+		t.Fatal(e)
+	}
+	if p, e := OpenPostgres(context.Background(), dsn, func() (State, error) { t.Error("unknown schema reinitialized"); return initial, nil }); e == nil {
+		_ = p.Close()
+		t.Fatal("unknown schema accepted")
+	}
+}

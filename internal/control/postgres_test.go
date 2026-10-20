@@ -12,15 +12,14 @@ import (
 	"time"
 
 	"github.com/XUJiahua/tunnel-mvp/internal/state"
-	"github.com/XUJiahua/tunnel-mvp/internal/testpostgres"
 	"github.com/gorilla/websocket"
+	"os"
 )
 
 func TestPostgresRuntimeFencesRealAgentStreams(t *testing.T) {
-	dsn := testpostgres.Database(t)
 	t.Setenv("TUNNEL_TEST_STORAGE", state.Postgres)
-	t.Setenv("TUNNEL_POSTGRES_DSN", dsn)
 	f := setup(t)
+	dsn := os.Getenv("TUNNEL_POSTGRES_DSN")
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/events" {
 			w.Header().Set("Content-Type", "text/event-stream")

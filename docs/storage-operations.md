@@ -4,6 +4,8 @@
 
 当前授权存储使用 SQLite schema v10、backup v10，继续读取 backup v1–v9。已有 SQLite v1–v9 首次被 Server、inspect 或 export 打开时会事务升级；**先用支持 storage 的旧二进制导出，并备份停机目录，再换程序**。v0.1.1 没有 storage 命令，使用 [专项升级手册](upgrade-v0.1.1.md) 的整目录备份流程。失败不会留下部分 schema。回滚须使用升级前备份。详见 [OIDC 升级手册](oidc-operations.md)。
 
+PostgreSQL 是新增的单活数据库后端，独立 schema v1 / 同一授权模型 v10；新部署、JSON/SQLite 迁移、三后端恢复与异常运行标记见 [PostgreSQL 手册](postgres-operations.md)。本页后续命令主要说明本地 JSON/SQLite。
+
 ## 1. 选择后端
 
 | 场景 | 操作 |

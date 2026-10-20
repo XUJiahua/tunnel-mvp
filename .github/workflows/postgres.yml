@@ -7,7 +7,7 @@ permissions:
 jobs:
   postgres:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
@@ -20,7 +20,7 @@ jobs:
         ports:
           - 5432:5432
         options: >-
-          --health-cmd pg_isready
+          --health-cmd "pg_isready -U postgres"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 15
@@ -34,4 +34,43 @@ jobs:
           go-version: '1.27.2'
           cache: true
       - name: Real database concurrency, constraints, recovery and proxy fencing
-        run: go test -race -count=1 -timeout=10m -v ./internal/state ./internal/control ./cmd/tunnel -run Postgres
+        run: |
+          go test -race -count=1 -timeout=10m -v ./internal/state ./cmd/tunnel -run Postgres
+          TUNNEL_TEST_STORAGE=postgres go test -race -count=1 -timeout=10m ./internal/control
+
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: web/package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - run: make build
+      - run: pnpm exec playwright install --with-deps chromium
+        working-directory: web
+      - run: bash scripts/prepare-keycloak-e2e.sh "$RUNNER_TEMP/tunnel-keycloak"
+      - name: PostgreSQL browser and real Keycloak regression
+        working-directory: web
+        env:
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+          KEYCLOAK_HOME: ${{ runner.temp }}/tunnel-keycloak/server
+        run: |
+          index=0
+          for spec in tests/*.spec.ts; do
+            index=$((index+1))
+            database="tunnel_browser_${index}"
+            docker exec "$POSTGRES_CONTAINER" createdb -U postgres "$database"
+            TUNNEL_TEST_STORAGE=postgres \
+              TUNNEL_POSTGRES_DSN="postgres://postgres:tunnel-test-only@127.0.0.1:5432/$database?sslmode=disable" \
+              pnpm exec playwright test "$spec"
+          done
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: postgres-${{ matrix.version }}-failure
+          path: web/test-results

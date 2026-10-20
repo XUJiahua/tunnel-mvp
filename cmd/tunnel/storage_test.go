@@ -59,7 +59,7 @@ func TestStorageCLIWorkflowAndConfiguration(t *testing.T) {
 	if _, err = state.Inspect(target, state.SQLite); err != nil {
 		t.Fatal(err)
 	}
-	for _, args := range [][]string{{"storage", "export"}, {"storage", "restore"}, {"storage", "validate"}, {"storage", "migrate", "--from", "sqlite", "--to", "json"}, {"storage", "inspect", "--storage", "postgres"}, {"storage", "migrate", "-c", configPath}} {
+	for _, args := range [][]string{{"storage", "export"}, {"storage", "restore"}, {"storage", "validate"}, {"storage", "migrate", "--from", "sqlite", "--to", "json"}, {"storage", "inspect", "--storage", "postgres", "--data-dir", t.TempDir()}, {"storage", "migrate", "-c", configPath}} {
 		if _, err := execute(args...); err == nil {
 			t.Fatalf("accepted invalid operation: %v", args)
 		}

@@ -7,3 +7,7 @@
 `make test` 显式执行嵌套模块 race/vet，并验证同时心跳/数据流和超时写不遗留后台写锁。应用完整端到端仍验证 Agent HTTP、上传、WS/SSE、重连与撤销。后续升级依赖时应比较这几处改动，只有上游包含等价修复并通过全部验证后才移除 replace。
 
 源码补丁说明见 [PATCHES.md](../third_party/remotedialer/PATCHES.md)。发布压缩包随附 [原 Apache-2.0 许可](licenses/remotedialer-LICENSE)。本次补丁不等于生产安全审计，也不提供控制面 HA。
+
+## PostgreSQL 驱动
+
+使用官方 `github.com/lib/pq v1.12.3`，不修改依赖源码，保持纯 Go 构建。其 MIT 许可随发布包保留于 [libpq-LICENSE](licenses/libpq-LICENSE)。运行所需 PostgreSQL 数据库由部署方独立提供，单二进制不内嵌数据库。
