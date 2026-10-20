@@ -47,7 +47,7 @@ test("directory UI loads beyond 100 and restarts after a real revision conflict"
   });
   await page.goto(url);
   await expect(page.locator(".profile")).toContainText("admin");
-  await page.getByRole("button", { name: "站点", exact: true }).click();
+  await page.locator("nav").getByRole("button", { name: /^站点/ }).click();
   await expect(page.locator(".filterbar")).toContainText("104 个站点");
   await page.getByRole("textbox", { name: "搜索", exact: true }).fill("Directory site 102");
   await expect(page.getByRole("heading", { name: "Directory site 102", exact: true })).toBeVisible();
