@@ -144,6 +144,7 @@ func (s *Server) startBackground() {
 		}
 	}()
 	s.startIdentitySync(ctx)
+	s.startStorageFence(ctx)
 }
 func (s *Server) probeAll(ctx context.Context) {
 	// Four workers bound concurrency and shutdown latency; one batch at a time.

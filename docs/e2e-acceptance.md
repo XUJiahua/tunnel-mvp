@@ -80,3 +80,9 @@ Linux 上执行的协议/进程测试和六平台编译没有验证 macOS/Window
 本批增加两后端登录/目录/成员索引的事务与恢复测试，以及四项前端分页单元测试；原有每后端 15 项浏览器增加为 16 项。目录浏览器故意在第一页后写入，要求丢弃部分结果并从头重读；索引计划、事务回滚和并发跨表一致性由 Go 测试验证。新实现/基准见 [存储查询设计](design/storage-queries.md)。当前提交上的实际全量/浏览器/Keycloak CI 结论以本批 PR 为准，不能复用 #25 的通过状态。
 
 上一阶段 #25 已整合 main，PR CI [39358470814](https://github.com/XUJiahua/tunnel-mvp/actions/runs/39358470814) 的 verify、六平台、双后端 Keycloak 均通过；公网模拟报告见 [边界及证据](cloudflare-simulation.md)。
+
+## HA-1：PostgreSQL
+
+新增独立 postgres-storage 工作流，在 PostgreSQL 15/18 服务上强制运行真实数据库 race 测试、完整控制面回归、按浏览器夹具分配独立空库的全部浏览器用例及原生 Keycloak。覆盖双客户端并发/CAS/重建、最后管理员并发保护、SQL 约束/失败回滚、一致性投影与游标、三后端迁移/恢复、固定连接终止及真实 Agent SSE/WS 断流。测试 DSN 缺失在该工作流直接失败，不把本地 skip 计为通过。
+
+首轮数据库/故障专项已在 PostgreSQL 15/18 通过（commit ca8a160）；扩大的最终门禁以本批 PR 的 head CI 为准。JSON/SQLite、真实旧版升级、六平台与原生 Keycloak 原有门禁保留。HA-1 只验证共享存储事务和单活 Server，不能作为双控制面 HA 验收。操作及性能边界见 [PostgreSQL 手册](postgres-operations.md)。

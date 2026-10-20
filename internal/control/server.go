@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/XUJiahua/tunnel-mvp/internal/config"
@@ -25,6 +26,7 @@ import (
 )
 
 type Server struct {
+	storageFenced    atomic.Bool
 	identitySync     *keycloakSync
 	history          *historyStore
 	oidc             *oidcLogin
@@ -322,6 +324,10 @@ func (s *Server) Handler() http.Handler {
 		static.ServeHTTP(w, r)
 	})
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.storageFenced.Load() {
+			fail(w, 503, "control plane storage unavailable; offline recovery required")
+			return
+		}
 		if !strings.EqualFold(r.Host, s.public.Host) {
 			s.gateway(w, r)
 			return

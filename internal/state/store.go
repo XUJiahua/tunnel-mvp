@@ -135,6 +135,9 @@ func Open(dir, kind string, initialize func() (State, error)) (*Store, error) {
 			_ = lock.Close()
 		}
 	}()
+	if err := rejectPostgresBinding(dir); err != nil {
+		return nil, err
+	}
 	if err := CheckOperationsRestore(dir); err != nil {
 		return nil, err
 	}

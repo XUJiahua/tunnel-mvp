@@ -24,6 +24,9 @@ func (s *Server) trackRequest(parent context.Context, u User, g grant) (context.
 	ctx, cancel := context.WithDeadline(parent, expires)
 	id := randomID()
 	s.liveMu.Lock()
+	if s.storageFenced.Load() {
+		cancel()
+	}
 	s.live[id] = liveRequest{u.ID, g.SessionKey, g.ServiceID, expires, cancel}
 	s.liveMu.Unlock()
 	return ctx, func() {

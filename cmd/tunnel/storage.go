@@ -1,8 +1,10 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/XUJiahua/tunnel-mvp/internal/config"
 	"github.com/XUJiahua/tunnel-mvp/internal/state"
@@ -12,14 +14,19 @@ import (
 func storageCommand(path *string) *cobra.Command {
 	root := &cobra.Command{Use: "storage", Short: "Offline state inspection, migration and portable backup/restore"}
 	root.PersistentFlags().String("data-dir", "data", "Persistent state directory; stop Server before maintenance")
-	root.PersistentFlags().String("storage", "json", "Backend: json or sqlite (or TUNNEL_STORAGE)")
+	root.PersistentFlags().String("storage", "json", "Backend: json, sqlite or postgres (or TUNNEL_STORAGE)")
 	effective := func(cmd *cobra.Command) (config.Server, error) { return config.ServerFrom(*path, cmd.Flags()) }
 	inspect := &cobra.Command{Use: "inspect", Short: "Validate existing state and print counts without credentials", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		c, err := effective(cmd)
 		if err != nil {
 			return err
 		}
-		summary, err := state.Inspect(c.DataDir, c.Storage)
+		var summary state.Summary
+		if c.Storage == state.Postgres {
+			summary, err = state.InspectPostgres(cmd.Context(), c.DataDir, os.Getenv("TUNNEL_POSTGRES_DSN"))
+		} else {
+			summary, err = state.Inspect(c.DataDir, c.Storage)
+		}
 		if err != nil {
 			return err
 		}
@@ -31,7 +38,12 @@ func storageCommand(path *string) *cobra.Command {
 		if err != nil {
 			return err
 		}
-		summary, err := state.Export(c.DataDir, c.Storage, exportPath)
+		var summary state.Summary
+		if c.Storage == state.Postgres {
+			summary, err = state.ExportPostgres(cmd.Context(), c.DataDir, os.Getenv("TUNNEL_POSTGRES_DSN"), exportPath)
+		} else {
+			summary, err = state.Export(c.DataDir, c.Storage, exportPath)
+		}
 		if err != nil {
 			return err
 		}
@@ -39,30 +51,44 @@ func storageCommand(path *string) *cobra.Command {
 	}}
 	export.Flags().StringVar(&exportPath, "output", "", "New private backup file (contains credential hashes)")
 	_ = export.MarkFlagRequired("output")
-	var from, to string
-	migrate := &cobra.Command{Use: "migrate", Short: "Create SQLite from legacy JSON without changing the source", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
-		if from != state.JSON || to != state.SQLite {
+	var from, to, targetDataDir string
+	migrate := &cobra.Command{Use: "migrate", Short: "Copy offline JSON to SQLite, or JSON/SQLite to a new PostgreSQL database", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+		if to != state.Postgres && (from != state.JSON || to != state.SQLite) {
 			return fmt.Errorf("supported migration is --from json --to sqlite; use export/restore for other conversions")
 		}
 		c, err := effective(cmd)
 		if err != nil {
 			return err
 		}
-		summary, err := state.MigrateJSON(c.DataDir)
+		var summary state.Summary
+		if to == state.Postgres {
+			if targetDataDir == "" {
+				return fmt.Errorf("--target-data-dir is required for PostgreSQL migration")
+			}
+			summary, err = state.MigratePostgres(cmd.Context(), c.DataDir, from, targetDataDir, os.Getenv("TUNNEL_POSTGRES_DSN"))
+		} else {
+			summary, err = state.MigrateJSON(c.DataDir)
+		}
 		if err != nil {
 			return err
 		}
 		return output(cmd, summary)
 	}}
-	migrate.Flags().StringVar(&from, "from", "json", "Source backend (json)")
-	migrate.Flags().StringVar(&to, "to", "sqlite", "Target backend (sqlite)")
+	migrate.Flags().StringVar(&from, "from", "json", "Source backend (json or sqlite)")
+	migrate.Flags().StringVar(&to, "to", "sqlite", "Target backend (sqlite or postgres)")
+	migrate.Flags().StringVar(&targetDataDir, "target-data-dir", "", "Separate PostgreSQL runtime directory")
 	var restorePath string
 	restore := &cobra.Command{Use: "restore", Short: "Restore a verified backup into a fresh data directory", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		c, err := effective(cmd)
 		if err != nil {
 			return err
 		}
-		summary, err := state.Restore(c.DataDir, c.Storage, restorePath)
+		var summary state.Summary
+		if c.Storage == state.Postgres {
+			summary, err = state.RestorePostgres(cmd.Context(), c.DataDir, os.Getenv("TUNNEL_POSTGRES_DSN"), restorePath)
+		} else {
+			summary, err = state.Restore(c.DataDir, c.Storage, restorePath)
+		}
 		if err != nil {
 			return err
 		}
@@ -86,7 +112,12 @@ func storageCommand(path *string) *cobra.Command {
 		if err != nil {
 			return err
 		}
-		summary, err := state.ResetAdminPassword(c.DataDir, c.Storage, recoveryUsername, os.Getenv("TUNNEL_RECOVERY_PASSWORD"))
+		var summary state.Summary
+		if c.Storage == state.Postgres {
+			summary, err = state.ResetPostgresAdminPassword(cmd.Context(), c.DataDir, os.Getenv("TUNNEL_POSTGRES_DSN"), recoveryUsername, os.Getenv("TUNNEL_RECOVERY_PASSWORD"))
+		} else {
+			summary, err = state.ResetAdminPassword(c.DataDir, c.Storage, recoveryUsername, os.Getenv("TUNNEL_RECOVERY_PASSWORD"))
+		}
 		if err != nil {
 			return err
 		}
@@ -94,6 +125,26 @@ func storageCommand(path *string) *cobra.Command {
 	}}
 	recovery.Flags().StringVar(&recoveryUsername, "username", "", "Existing administrator username")
 	_ = recovery.MarkFlagRequired("username")
+
+	var stopped bool
+	recoverRuntime := &cobra.Command{Use: "recover-postgres-runtime", Short: "Clear an abandoned PostgreSQL runtime lease after externally stopping the old Server", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+		c, err := effective(cmd)
+		if err != nil {
+			return err
+		}
+		if c.Storage != state.Postgres {
+			return fmt.Errorf("requires --storage postgres")
+		}
+		ctx, cancel := context.WithTimeout(cmd.Context(), 10*time.Second)
+		defer cancel()
+		summary, err := state.RecoverPostgresRuntime(ctx, c.DataDir, os.Getenv("TUNNEL_POSTGRES_DSN"), stopped)
+		if err != nil {
+			return err
+		}
+		return output(cmd, summary)
+	}}
+	recoverRuntime.Flags().BoolVar(&stopped, "old-server-stopped", false, "Confirm the old Server is stopped or externally fenced")
+	root.AddCommand(recoverRuntime)
 	var exportOpsPath, restoreOpsPath, validateOpsPath string
 	exportOps := &cobra.Command{Use: "export-operations", Short: "Offline verified archive of audit history and monitoring database", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		c, err := effective(cmd)

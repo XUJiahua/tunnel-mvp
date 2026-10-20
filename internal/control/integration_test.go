@@ -24,6 +24,7 @@ import (
 
 	"github.com/XUJiahua/tunnel-mvp/internal/agent"
 	"github.com/XUJiahua/tunnel-mvp/internal/config"
+	"github.com/XUJiahua/tunnel-mvp/internal/testpostgres"
 	"github.com/gorilla/websocket"
 )
 
@@ -36,8 +37,15 @@ type fixture struct {
 	dir    string
 }
 
+func prepareTestStorage(t *testing.T) {
+	t.Helper()
+	if os.Getenv("TUNNEL_TEST_STORAGE") == "postgres" {
+		t.Setenv("TUNNEL_POSTGRES_DSN", testpostgres.Database(t))
+	}
+}
 func setup(t *testing.T) *fixture {
 	t.Helper()
+	prepareTestStorage(t)
 	h := httptest.NewUnstartedServer(nil)
 	dir := t.TempDir()
 	s, err := New(config.Server{PublicURL: "http://" + h.Listener.Addr().String(), AccessURL: "http://apps.localhost:" + strconv.Itoa(h.Listener.Addr().(*net.TCPAddr).Port), DataDir: dir, Storage: os.Getenv("TUNNEL_TEST_STORAGE")}, testPassword)
@@ -285,6 +293,10 @@ func TestRealTunnelProxyAndRevocation(t *testing.T) {
 	stateName := "state.json"
 	if f.s.cfg.Storage == "sqlite" {
 		stateName = "state.db"
+	}
+	if f.s.cfg.Storage == "postgres" {
+		stateName = "state.postgres"
+		checkPostgresSecrets(t, os.Getenv("TUNNEL_POSTGRES_DSN"), token, testPassword)
 	}
 	for _, name := range []string{stateName, "audit.jsonl"} {
 		data, err := os.ReadFile(filepath.Join(f.dir, name))

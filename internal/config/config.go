@@ -124,8 +124,8 @@ func (s *Server) Validate() error {
 	if s.Storage == "" {
 		s.Storage = "json"
 	}
-	if s.Storage != "json" && s.Storage != "sqlite" {
-		return fmt.Errorf("storage must be json or sqlite")
+	if s.Storage != "json" && s.Storage != "sqlite" && s.Storage != "postgres" {
+		return fmt.Errorf("storage must be json, sqlite or postgres")
 	}
 	if s.ProbeIntervalSeconds < 0 || (s.ProbeIntervalSeconds > 0 && s.ProbeIntervalSeconds < 10) || s.ProbeIntervalSeconds > 86400 {
 		return fmt.Errorf("probeIntervalSeconds must be 0 (disabled) or 10–86400")

@@ -10,7 +10,7 @@
 | 统一登录 | 控制面 OIDC、显式身份绑定、PKCE、Keycloak OTP 实测、back-channel/RP 退出、acr/amr、Keycloak 禁用自动撤销与 SSO 接入手册 | 更多 IdP/非默认 subject 的自动桥接实测 |
 | 会话撤销 | 退出、改密、删除、禁用/身份修改、收回授权、到期主动关闭 HTTP/WS/SSE、设备列表与逐会话撤销 | 跨实例会话与设备风险识别 |
 | Agent 管理 | 本地 ACL 监视、同站点多实例、独立凭据、故障切换、远程 ACL 收紧、签名升级/回滚 | macOS/Windows 服务实机验收 |
-| 持久化/HA | Repository 接口、JSON/SQLite、版本及引用校验、进程锁、离线迁移与跨后端备份恢复、增量 SQL 写入、资源/鉴权定向 SQL 查询 | 实时聚合投影、共享数据库/会话、跨实例隧道路由 |
+| 持久化/HA | Repository 接口、JSON/SQLite、版本及引用校验、进程锁、离线迁移与跨后端备份恢复、增量 SQL 写入、资源/鉴权定向 SQL 查询、PostgreSQL 事务/单活及离线迁移恢复 | 实时聚合投影、共享会话、跨实例隧道路由 |
 | 监控/运维 | 业务健康检查、持久化历史/图表、Prometheus、全部保留审计索引/分页、增量轮转与离线归档恢复 | 跨实例指标 |
 | 性能验证 | 按应用复用池、连接上限、断线清池、真实隧道复用/撤销、会话隔离池与本地容量报告 | 生产负载/目标 SLO 验证、独立安全审计 |
 | 应用兼容性 | 路径目标、域名/重定向/Cookie/CSRF、独立上游 OIDC 应用与浏览器上传/WS/SSE 实测 | 更多真实产品与平台实测；不承诺通用 HTML/JS 改写 |
@@ -166,3 +166,7 @@ SSH/RDP/数据库浏览器网关、UDP、P2P、QUIC、DNS/证书自动管理不�
 - 组织/资源/用户/组/角色/邀请管理目录的权限过滤、按位置分页和修订冲突；旧 API 形状兼容，控制台自动拉全并有界重试。
 - 显式记录 Update 的验证/落盘/缓存/修订发布边界，真实 SQL 失败注入、并发读取、恢复矩阵和局部基准。
 - 设计：[存储查询](design/storage-queries.md)。操作：[分页与索引](storage-query-operations.md)。实时 Agent/监控聚合与全量写校验保留原路径；HA 按 HA-1–HA-4 另行实现。
+
+## HA-1：PostgreSQL 事务存储
+
+阶段四 PR #26 已合入 main（4eb4a66）。本阶段增加 PostgreSQL schema v1 / 授权模型 v10、修订锁/CAS/显式意图重建、定向查询、离线迁移与配对恢复、固定连接单活锁及异常运行标记。真实数据库 CI 使用 15/18；Server 尚无多节点模式，HA-2 继续共享会话/OIDC/撤销，HA-3 处理隧道 owner/generation 与 mTLS。见 [实现设计](design/postgres-repository.md)及[操作手册](postgres-operations.md)。
