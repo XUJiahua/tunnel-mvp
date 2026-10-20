@@ -1,36 +1,54 @@
-# HA 与目标环境验收手册
+# HA 配置与故障验收
 
-HA-1 已增加 PostgreSQL 单活运行参数与离线恢复，见 [PostgreSQL 手册](postgres-operations.md)。HA-2 已接入 [共享认证和有界撤销](design/shared-authentication.md)。当前没有多控制面集群启动参数，部署保持一个活跃控制面进程。站点可以部署多个 Agent 实例；这是 Agent 故障后的新连接容灾。不要让多个控制面共享 data 目录，不要用网络文件系统绕过 SQLite/目录锁。
+HA-3 构建支持显式 PostgreSQL 多控制面及跨节点 Agent 流。使用本阶段最终 CI 通过的构建；v0.1.1 及 HA-1/2 构建不能按此配置启动。HA-4 的审计/指标聚合与滚动恢复验收尚未完成，不将本阶段当作完整生产 HA 验收。
 
-## 当前可执行恢复
+## 双节点部署
 
-1. 按存储及监控手册取得配对、离线且已验证的授权与运维备份。
-2. 原控制面停止并确认不会自动恢复启动后，在新主机恢复到空目录，保持公网入口、TLS、cookie/IdP 配置一致。
-3. 启动一个控制面，等待 Agent 重连。从控制台重新登录并打开应用；旧活动 TCP/WS/SSE 不会迁移。
-4. 检查成员权限、探测、审计及监控。发生失败先停止新进程再按配对备份恢复，不能同时启动两个写进程。
+准备独立 PostgreSQL 数据库、两个独立运行目录、共同公网控制台/应用入口及支持 WebSocket/SSE 的负载均衡。公网入口无需粘性会话；`/healthz` 失去节点/数据库权威后返回 503。节点之间只开放私有 mTLS 端口，不能把该端口转发到公网。JSON/SQLite 保持单进程。
 
-这是停机恢复流程，不是无缝 HA。具体命令以 [存储](storage-operations.md)及[监控归档](monitoring-operations.md)手册为准。
+为广告地址生成专用 CA 和不同节点证书，例如：
 
-## HA 实现后的隔离验收清单
+```bash
+bash scripts/create-cluster-pki.sh ./cluster-pki \
+  node-a=10.20.0.11 node-b=10.20.0.12
+```
 
-下表是待执行契约，不是已通过结果。环境应使用合成用户、测试站点、测试密钥及非生产数据库，记录节点/版本/后端/故障时间/请求 ID。数值目标先由项目与目标部署确定再验收。
+命令要求 OpenSSL、Python 3，拒绝已有输出目录。CA 私钥留在线下签发机；每台节点只部署 ca.crt 和自己的 node.crt/node.key，目录 0700、私钥 0600。叶证书有效 90 天，节点 URI 分别为 `spiffe://tunnel-mvp/node/node-a` / `node-b`，同时有 serverAuth/clientAuth 和广告地址 SAN。可接入自有 PKI，只要满足这些校验。
 
-| 故障/动作 | 操作与期望 | 证据 |
-| --- | --- | --- |
-| 跨节点登录/回调 | 禁止粘性路由，回调落另一节点仍完成；重复 state/资源票据一次成功 | 节点 ID、条件更新结果、浏览器回放 |
-| 角色/授权撤销 | A 修改角色，B 的旧请求与 WS/SSE 在约定期限内拒绝/关闭 | 提交修订号、outbox 消费和最后成功请求时间 |
-| 最后管理员并发删除 | A/B 并行降权各自看到的“另一个”管理员，至少一个事务拒绝 | 数据库最终管理员数量及冲突日志 |
-| owner 进程被终止 | 旧流结束，新连接选新 owner；POST 不自动重放 | 请求体唯一标识、上游接收次数、generation |
-| 节点间分区 | 失联节点不能延续过期权限/租约，不接受过期 generation | 租约时间线、旧 owner 通道关闭和内部流拒绝 |
-| 数据库中断/恢复 | 不使用过期权限无限放行；恢复后不会复活已撤销会话 | 失败指标、缓存期限与撤销最终状态 |
-| 内部 TLS/身份伪造 | 无节点证书、错误 generation/目标/期限或公网注入头被拒绝 | 拒绝原因和零上游请求 |
-| 滚动升级/备份恢复 | 兼容版本可加入，不兼容拒绝；配对恢复和审计可追踪 | 版本矩阵、迁移记录、恢复后权限验证 |
+使用 [节点 A](../examples/cluster/server.node-a.json) 和 [节点 B](../examples/cluster/server.node-b.json) 配置，替换地址及证书路径。两个节点的 publicURL、accessURL、OIDC、身份桥接、协议与 CA 集必须一致；不同策略拒绝加入。通过私有环境向两节点提供同一 `TUNNEL_POSTGRES_DSN`，使用 verify-full 等生产数据库 TLS 设置，见 [PostgreSQL 手册](postgres-operations.md)。新空库的首次初始化还需 `TUNNEL_ADMIN_PASSWORD`。
 
-## 其他目标环境
+```bash
+./tunnel server --config examples/cluster/server.node-a.json --check-config
+./tunnel server --config examples/cluster/server.node-a.json
+# 另一主机使用 node-b 配置、独立 dataDir 和自己的证书。
+```
 
-- macOS/Windows：实际服务管理器的启动/停止、进程树清理、升级替换/签名校验/回滚、断电恢复、权限及文件锁。六平台编译只证明可编译。
-- AD/NTLM：域加入真实应用、两个浏览器身份、并发和长连接、会话连接隔离、撤销与重连。当前 session 模式不保证所有 NTLM 产品兼容。
-- 额外 IdP/subject 模式：真实租户的 discovery、PKCE、MFA、用户绑定、禁用、注销及证书轮换；默认 Keycloak subject=userID 的桥接不能用于 pairwise subject。
-- 生产容量：明确硬件/网络/TLS/上传落盘、流量形态和 SLO，按现有容量脚本建立基线再故障压测。当前本地 5464 次零错误记录不代表生产容量承诺。
+也可使用 `--cluster-enabled`、`--cluster-node-id`、`--cluster-listen`、`--cluster-advertise-url`、`--cluster-ca-file`、`--cluster-cert-file`、`--cluster-key-file`；环境变量对应 `TUNNEL_CLUSTER_*`。`--check-config` 仅检查配置，不证明数据库连接、证书加载或节点互通成功。`node.id` 绑定配置的稳定 nodeID，保留在该节点私有目录，不能复制给其他节点。不要共享 dataDir 或 monitor.db，也不能删除目录锁绕过限制。
 
-多组织成员、组织级 IdP、设备风险识别、增量 SQL 查询仍属代码扩展；不能把它们写成“仅待外部验收”。见 [路线图](roadmap.md)。
+## 从单活迁入及离线维护
+
+1. 备份授权及原节点运维归档，停止单活 Server 并禁用自动拉起，确认旧进程不会继续服务。
+2. 正常停机会释放原运行标记；异常退出时按 PostgreSQL 手册执行 `storage recover-postgres-runtime --old-server-stopped`。
+3. 用同一数据库和独立新目录启动 cluster node-a，再启动 node-b。新目录与数据库绑定；如原目录已有随机 consumer node.id，使用新目录。首次切入集群协议会使不匹配的共享认证策略失效，重新登录。
+4. 让 Agent 通过共同公网入口连接，在另一节点进入应用验证跨节点流。切换期间旧连接会结束。
+
+集群正常全停后仍保留 `cluster-v1` 模式标记，防止旧单活构建意外进入。切回单活、离线改密、portable 导出/其他维护前，必须停止并隔离**全部**节点，再明确执行：
+
+```bash
+./tunnel storage recover-postgres-runtime --storage postgres \
+  --data-dir /var/lib/tunnel/node-a --old-server-stopped
+```
+
+任何活节点持有共享锁时此操作拒绝。该声明不能代替操作者确认远端停机。随后按 [存储手册](storage-operations.md) 和 PostgreSQL 手册导出、校验及恢复；授权 portable backup 不带会话、票据、节点或 Agent 运行 claim，恢复到新库后重新登录并让 Agent 重连。每个节点的审计/监控分别归档，尚无自动聚合恢复。
+
+## 故障与证书更新
+
+节点每秒续租；数据库租期 10 秒，本地准入及现有流证明最长 5 秒，自查询开始计时。失去有效证明的节点保持关闭状态，数据库恢复后应重启。接管还需 Agent 重连及 LB 检测，不能承诺固定的用户恢复秒数。现有连接不迁移，不重放已发送 POST。
+
+同一 CA 下更新节点叶证书需先摘除并停止该节点，再部署符合原 nodeID 的新证书和启动；新 incarnation/指纹会写入数据库。其他节点继续服务。当前不支持在线重载证书；更换 CA 集、协议或公共认证策略需要全停和离线模式恢复，混用策略会拒绝加入。版本兼容窗口及完整滚动恢复属于 HA-4。
+
+## 验收与证据边界
+
+隔离 CI PostgreSQL 15/18 强制运行 `TestPostgresCluster*`：数据库代际/旧释放保护、schema v2 升级、模式排斥；两个独立 Server、私有 TLS 监听、HTTP LB 和真实 Agent 的跨节点 HTTP/上传/WS/SSE、跨节点注销、心跳中断后的本地 fencing 和接管、直接杀掉独立 owner OS 进程后的真实 Agent 重连、POST 单次上游执行、伪造 generation/目标/成员 incarnation/数据库/授权及公网注入拒绝。没有测试 DSN 时本地跳过数据库测试，不能当作数据库通过；最终结果见 PR #30。
+
+仍需目标部署验收：跨宿主机 kill -9/网络分区与数据库主备切换、生产负载及恢复 SLO、外部 LB/TLS 超时、证书轮换和完整恢复演练。macOS/Windows 实际服务管理器、AD/NTLM、额外 IdP 租户分别记录；交叉编译不能替代这些测试。HA-4 继续补跨节点监控/审计来源、聚合与去重。

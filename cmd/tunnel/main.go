@@ -90,6 +90,13 @@ func newRootCommand() *cobra.Command {
 		defer s.Close()
 		return s.Run(cmd.Context())
 	}}
+	server.Flags().Bool("cluster-enabled", false, "Enable PostgreSQL multi-node routing with mutual TLS")
+	server.Flags().String("cluster-node-id", "", "Unique node ID bound to its certificate URI")
+	server.Flags().String("cluster-listen", "", "Private mutual-TLS host:port")
+	server.Flags().String("cluster-advertise-url", "", "Private HTTPS origin advertised to other nodes")
+	server.Flags().String("cluster-ca-file", "", "Private cluster CA certificate bundle")
+	server.Flags().String("cluster-cert-file", "", "Node certificate chain with server/client usages and node URI")
+	server.Flags().String("cluster-key-file", "", "Private node key file")
 	server.Flags().StringSlice("oidc-required-acr", nil, "Accepted OIDC acr values; at least one must match when configured")
 	server.Flags().StringSlice("oidc-required-amr", nil, "Required OIDC amr methods; every configured value must be present")
 	server.Flags().Bool("keycloak-sync-enabled", false, "Check Keycloak user status for OIDC sessions")

@@ -1,6 +1,6 @@
-# PostgreSQL 操作手册（HA-1/HA-2）
+# PostgreSQL 操作手册（HA-1/HA-2/HA-3）
 
-适用于包含本阶段代码的构建；未发布的新能力不能由 v0.1.1 二进制执行。支持 PostgreSQL 15 以上，CI 验证 15 和 18。当前仍部署一个活跃 Server，数据库服务需独立维护，运行目录不能共享。会话/OIDC 已共享存储，隧道 owner 与跨节点路由尚未实现，审计/监控仍在本地。
+适用于包含本阶段代码的构建；未发布的新能力不能由 v0.1.1 二进制执行。支持 PostgreSQL 15 以上，CI 验证 15 和 18。默认部署一个活跃 Server；HA-3 的显式集群配置见 [HA 手册](ha-operations.md)。数据库服务需独立维护，运行目录不能共享；审计/监控仍按节点本地保存。
 
 ## 新部署
 
@@ -66,7 +66,7 @@ export TUNNEL_POSTGRES_DSN='postgres://tunnel@db.internal/tunnel?sslmode=verify-
 ./tunnel server --storage postgres --data-dir /srv/tunnel-pg
 ```
 
-`--old-server-stopped` 是操作者对外部停机/隔离的明确声明，命令不能自行证明远端进程已停。活跃连接仍持锁时恢复拒绝。不要定时自动清标记或直接改表；自动故障接管属于后续 HA-3。
+`--old-server-stopped` 是操作者对外部停机/隔离的明确声明，命令不能自行证明远端进程已停。活跃连接仍持锁时恢复拒绝。不要定时自动清标记或直接改表；显式 HA-3 集群的租约接管及全停维护见 HA 手册，此处异常单活恢复规则不变。
 
 ## 开发验证
 
@@ -81,6 +81,6 @@ TUNNEL_REQUIRE_POSTGRES_TESTS=1 TUNNEL_TEST_STORAGE=postgres go test -race -coun
 
 ## 共享认证与升级
 
-HA-2 启动时把 PostgreSQL schema v1 事务升级为 v2；授权备份格式仍为 v10。正常重启保留尚未到期的 PostgreSQL 会话和 OIDC 待回调，JSON/SQLite 重启仍要求重新登录。更改公网 URL、OIDC 或 Keycloak 桥接策略会使旧共享会话失效。portable backup/restore 不携带认证运行记录，恢复后重新登录；应用长连接不能跨重启迁移。
+HA-2 启动时把 PostgreSQL schema v1 事务升级为 v2，HA-3 再事务升级为 v3；授权备份格式仍为 v10。正常重启保留尚未到期的 PostgreSQL 会话和 OIDC 待回调，JSON/SQLite 重启仍要求重新登录。更改公网 URL、OIDC 或 Keycloak 桥接策略会使旧共享会话失效。portable backup/restore 不携带认证运行记录，恢复后重新登录；应用长连接不能跨重启迁移。
 
-`node.id` 是自动创建的私有 consumer 标识，应与运行目录一同保留，不能作为节点认证凭据。生产仍只运行一个 Server。授权证明和撤销边界见 [共享认证设计](design/shared-authentication.md)。
+`node.id` 是自动创建的私有 consumer 标识，应与运行目录一同保留，不能作为节点认证凭据。集群模式的 node.id 绑定显式配置的 nodeID，各节点独立目录。授权证明和撤销边界见 [共享认证设计](design/shared-authentication.md)。

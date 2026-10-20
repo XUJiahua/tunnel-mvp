@@ -48,7 +48,8 @@ type OIDC struct {
 	SessionMinutes int          `json:"sessionMinutes" mapstructure:"sessionMinutes"`
 }
 type Server struct {
-	OIDC                 OIDC `json:"oidc" mapstructure:"oidc"`
+	Cluster              Cluster `json:"cluster" mapstructure:"cluster"`
+	OIDC                 OIDC    `json:"oidc" mapstructure:"oidc"`
 	Logging              `mapstructure:",squash"`
 	Listen               string `json:"listen" mapstructure:"listen"`
 	PublicURL            string `json:"publicURL" mapstructure:"publicURL"`
@@ -126,6 +127,9 @@ func (s *Server) Validate() error {
 	}
 	if s.Storage != "json" && s.Storage != "sqlite" && s.Storage != "postgres" {
 		return fmt.Errorf("storage must be json, sqlite or postgres")
+	}
+	if err := s.Cluster.validate(s.Storage); err != nil {
+		return err
 	}
 	if s.ProbeIntervalSeconds < 0 || (s.ProbeIntervalSeconds > 0 && s.ProbeIntervalSeconds < 10) || s.ProbeIntervalSeconds > 86400 {
 		return fmt.Errorf("probeIntervalSeconds must be 0 (disabled) or 10–86400")

@@ -29,6 +29,9 @@ func OpenStore(dir, username, password string) (*Store, error) {
 	return openStore(dir, state.JSON, username, password)
 }
 func openStore(dir, kind, username, password string) (*Store, error) {
+	return openServingStore(dir, kind, username, password, false)
+}
+func openServingStore(dir, kind, username, password string, cluster bool) (*Store, error) {
 	initialize := func() (State, error) {
 		if len(password) < 12 || len(password) > 72 {
 			return State{}, fmt.Errorf("first start requires TUNNEL_ADMIN_PASSWORD (12–72 bytes)")
@@ -41,7 +44,9 @@ func openStore(dir, kind, username, password string) (*Store, error) {
 	}
 	var repo state.Repository
 	var err error
-	if kind == state.Postgres {
+	if cluster {
+		repo, err = state.OpenPostgresClusterRuntime(context.Background(), dir, os.Getenv("TUNNEL_POSTGRES_DSN"), initialize)
+	} else if kind == state.Postgres {
 		repo, err = state.OpenPostgresRuntime(context.Background(), dir, os.Getenv("TUNNEL_POSTGRES_DSN"), initialize)
 	} else {
 		repo, err = state.Open(dir, kind, initialize)

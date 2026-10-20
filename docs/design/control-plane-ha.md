@@ -1,6 +1,6 @@
 # 控制面 HA：阶段实现与验收约束
 
-状态：HA-1 增加 PostgreSQL Repository、事务修订与单活运行隔离，详见 [存储实现](postgres-repository.md)。HA-2 已接入共享认证与 5 秒授权租约，见 [共享认证设计](shared-authentication.md)；HA-3/4 待实施；当前控制面仍须单进程独占运行目录和数据库运行锁，本文件不提供多控制面 HA 配置。多 Agent 提供站点侧冗余，不提供控制面高可用。
+状态：HA-1 增加 PostgreSQL Repository、事务修订与单活运行隔离，详见 [存储实现](postgres-repository.md)。HA-2 已接入共享认证与 5 秒授权租约，见 [共享认证设计](shared-authentication.md)；HA-3 加入 [节点租约与 mTLS 路由](cluster-routing.md) 和显式集群参数，各节点独立目录；HA-4 聚合及完整滚动恢复待实施。最终验收以 PR #30 为准。
 
 ## 当前单实例依赖
 
@@ -9,15 +9,15 @@
 | 用户、角色、授权、资源、Agent 凭据 | JSON/SQLite 或 PostgreSQL Repository | PostgreSQL 已有事务排序/修订冲突和事务 outbox |
 | 登录、一次性票据、设备、撤销 | PostgreSQL 私有认证表；本地后端保留内存 | HA-2 事务一次消费、共享到期和撤销证明 |
 | OIDC state/nonce/PKCE、退出重放记录 | PostgreSQL 私有认证表 | HA-2 跨节点原子消费与注销重放防护 |
-| Agent WebSocket、TCP 通道和连接池 | 持有连接的进程 | 隧道 owner、租约、fencing 和跨节点流量 |
-| 活跃 HTTP/WS/SSE 与远程策略 | 本地取消、共享证明和轮询 | HA-2 的应用流 5 秒授权租约；HA-3 待实现 owner fencing |
+| Agent WebSocket、TCP 通道和连接池 | 持有连接的进程 | HA-3 共享 owner/generation、租约和 mTLS 流 |
+| 活跃 HTTP/WS/SSE 与远程策略 | 本地取消、共享证明和轮询 | HA-2 的应用流 5 秒授权租约；HA-3 增加 owner fencing |
 | 审计、监控与 Keycloak 状态 | 审计/监控本地；身份状态共享并绑定 epoch | HA-4 按节点留存和聚合，源身份与去重 |
 
-共享目录、SQLite 文件或粘性负载均衡都不能解决这些依赖。不能删除目录锁使现有两个进程同时写入。JSON/SQLite 保持单进程边界；PostgreSQL 支持独立存储客户端的跨连接事务，但 Server 仍强制单活。
+共享目录、SQLite 文件或粘性负载均衡都不能解决这些依赖。不能删除目录锁使现有两个进程同时写入。JSON/SQLite 保持单进程边界；PostgreSQL 支持独立存储客户端的跨连接事务，Server 需显式启用 cluster 模式才能多节点。
 
 ## 候选架构
 
-共享事务数据库采用 PostgreSQL，HA-1 已加入驱动、schema、定向查询、离线迁移/恢复和单数据库多客户端事务实现。HA-2 已接入共享会话/撤销；下一步引入跨节点网络数据路径。所有状态变更带事务修订号，唯一约束和外键由数据库执行；JSON/SQLite 作为单实例后端继续保留。不能把已有进程内写锁当作数据库锁。
+共享事务数据库采用 PostgreSQL，HA-1 已加入驱动、schema、定向查询、离线迁移/恢复和单数据库多客户端事务实现。HA-2 已接入共享会话/撤销；HA-3 已引入跨节点私有网络数据路径。所有状态变更带事务修订号，唯一约束和外键由数据库执行；JSON/SQLite 作为单实例后端继续保留。不能把已有进程内写锁当作数据库锁。
 
 1. 授权变更、会话撤销版本与 outbox 事件在同一事务提交。消费者幂等读取持久 outbox，通知只是加速，不能靠易丢消息保证撤销。请求使用的权限快照必须有可验证版本和最大陈旧期限，超过期限拒绝访问并关闭旧流。
 2. 登录、设备、资源票据、OIDC 交互及退出重放记录使用共享 TTL 状态；票据/回调通过条件更新一次消费。全局管理员保护和角色能力上限必须在数据库事务中重新验证，避免两节点同时删除最后管理员。
@@ -41,7 +41,7 @@ HA-2 的授权租约为 5 秒、证明轮询为 1 秒，具体边界见共享认
 
 ## 验收环境与阻塞
 
-当前工作环境是单台 Linux 容器，有真实 Go/Chromium/Keycloak 和双 Agent 测试。本地没有 PostgreSQL 服务、Docker/Podman；已使用隔离 CI PostgreSQL 15/18 服务验证数据库和单活故障机制。尚没有生产式独立节点/内部 TLS/可控故障入口，也没有 macOS/Windows 主机、AD/NTLM 或额外 IdP 测试租户。缺少环境阻塞相应**验收**，不代表上述 HA 代码已实现，或所有剩余代码都依赖外部环境。
+当前工作环境是单台 Linux 容器，有真实 Go/Chromium/Keycloak 和双 Agent 测试。本地没有 PostgreSQL 服务、Docker/Podman；已使用隔离 CI PostgreSQL 15/18 服务验证数据库和单活故障机制。HA-3 CI 增加双 Server/LB、内部 TLS 和心跳故障注入；尚没有生产式独立宿主机网络演练，也没有 macOS/Windows 主机、AD/NTLM 或额外 IdP 测试租户。缺少环境阻塞相应**验收**，不代表上述 HA 代码已实现，或所有剩余代码都依赖外部环境。
 
 进行 HA 实现仍需要完成上表代码工作，并准备隔离数据库、两个独立控制面节点、负载均衡/TLS、节点间网络故障注入和测试域名；不得指向生产数据库或破坏生产入口。macOS/Windows 与其他 IdP 的验收独立记录，不以 Linux 交叉编译代替。
 

@@ -37,12 +37,14 @@ jobs:
         with:
           go-version: '1.27.2'
           cache: true
+      - name: HA-3 real cluster routing, partition and process-crash takeover
+        run: go test -race -count=2 -timeout=4m -v ./internal/state ./internal/control -run '^TestPostgresCluster'
       - name: Shared-auth pool proof races and real connection reuse
         run: TUNNEL_TEST_STORAGE=postgres go test -race -count=5 -timeout=2m ./internal/control -run 'TestSharedAuthProof|TestSessionCleanupPreserves|TestPoolReuseMonitoringAndAudit'
       - name: Real database concurrency, constraints, recovery and proxy fencing
         run: |
           go test -race -count=1 -timeout=10m -v ./internal/state ./cmd/tunnel -run Postgres
-          TUNNEL_TEST_STORAGE=postgres go test -race -count=1 -timeout=2m ./internal/control -run 'Postgres|TestRealTunnelProxyAndRevocation|TestOIDCStartupFailureReleasesStore'
+          TUNNEL_TEST_STORAGE=postgres go test -race -count=1 -timeout=2m ./internal/control -skip '^TestPostgresCluster' -run 'Postgres|TestRealTunnelProxyAndRevocation|TestOIDCStartupFailureReleasesStore'
           TUNNEL_TEST_STORAGE=postgres go test -race -count=1 -timeout=10m ./internal/control
 
       - uses: pnpm/action-setup@v4

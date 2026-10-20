@@ -10,7 +10,7 @@
 | 统一登录 | 控制面 OIDC、显式身份绑定、PKCE、Keycloak OTP 实测、back-channel/RP 退出、acr/amr、Keycloak 禁用自动撤销与 SSO 接入手册 | 更多 IdP/非默认 subject 的自动桥接实测 |
 | 会话撤销 | 退出、改密、删除、禁用/身份修改、收回授权、到期主动关闭 HTTP/WS/SSE、设备列表与逐会话撤销 | 跨实例会话与设备风险识别 |
 | Agent 管理 | 本地 ACL 监视、同站点多实例、独立凭据、故障切换、远程 ACL 收紧、签名升级/回滚 | macOS/Windows 服务实机验收 |
-| 持久化/HA | Repository 接口、JSON/SQLite、版本及引用校验、进程锁、离线迁移与跨后端备份恢复、增量 SQL 写入、资源/鉴权定向 SQL 查询、PostgreSQL 事务/单活及离线迁移恢复、共享认证/outbox/授权租约 | 实时聚合投影、跨实例隧道路由 |
+| 持久化/HA | Repository 接口、JSON/SQLite、版本及引用校验、进程锁、离线迁移与跨后端备份恢复、增量 SQL 写入、资源/鉴权定向 SQL 查询、PostgreSQL 事务/单活及离线迁移恢复、共享认证/outbox/授权租约、HA-3 节点代际/mTLS 路由 | 实时聚合投影与 HA-4 恢复演练 |
 | 监控/运维 | 业务健康检查、持久化历史/图表、Prometheus、全部保留审计索引/分页、增量轮转与离线归档恢复 | 跨实例指标 |
 | 性能验证 | 按应用复用池、连接上限、断线清池、真实隧道复用/撤销、会话隔离池与本地容量报告 | 生产负载/目标 SLO 验证、独立安全审计 |
 | 应用兼容性 | 路径目标、域名/重定向/Cookie/CSRF、独立上游 OIDC 应用与浏览器上传/WS/SSE 实测 | 更多真实产品与平台实测；不承诺通用 HTML/JS 改写 |
@@ -169,8 +169,12 @@ SSH/RDP/数据库浏览器网关、UDP、P2P、QUIC、DNS/证书自动管理不�
 
 ## HA-1：PostgreSQL 事务存储
 
-阶段四 PR #26 已合入 main（4eb4a66）。本阶段增加 PostgreSQL schema v1 / 授权模型 v10、修订锁/CAS/显式意图重建、定向查询、离线迁移与配对恢复、固定连接单活锁及异常运行标记。真实数据库 CI 使用 15/18；Server 尚无多节点模式，HA-2 已接入共享会话/OIDC/撤销证明，HA-3 处理隧道 owner/generation 与 mTLS。见 [实现设计](design/postgres-repository.md)及[操作手册](postgres-operations.md)。
+阶段四 PR #26 已合入 main（4eb4a66）。本阶段增加 PostgreSQL schema v1 / 授权模型 v10、修订锁/CAS/显式意图重建、定向查询、离线迁移与配对恢复、固定连接单活锁及异常运行标记。真实数据库 CI 使用 15/18；HA-2 已接入共享会话/OIDC/撤销证明，HA-3 增加显式多节点与 owner/generation/mTLS。见 [实现设计](design/postgres-repository.md)及[操作手册](postgres-operations.md)。
 
 ## HA-2：共享认证生命周期
 
-PostgreSQL schema v2 保存会话、票据、OIDC 交互、注销与身份证明；配置/撤销/outbox 同事务，调用者在写锁内重新鉴权。应用 HTTP/WS/SSE 每秒重新证明，独立 5 秒租约限制失联时继续访问。真实双 HTTP 节点测试通过私有注入构造器运行，生产仍单活，HA-3 尚未实现 Agent owner 与内部路由。认证运行记录不进入 portable backup v10，JSON/SQLite 认证生命周期保持本地。完整验收结果以本阶段 PR 与 CI 为准；见 [设计](design/shared-authentication.md)。
+PostgreSQL schema v2 保存会话、票据、OIDC 交互、注销与身份证明；配置/撤销/outbox 同事务，调用者在写锁内重新鉴权。应用 HTTP/WS/SSE 每秒重新证明，独立 5 秒租约限制失联时继续访问。真实双 HTTP 节点测试通过私有注入构造器运行，后续 HA-3 加入显式集群启动与 Agent owner/内部路由。认证运行记录不进入 portable backup v10，JSON/SQLite 认证生命周期保持本地。完整验收结果以本阶段 PR 与 CI 为准；见 [设计](design/shared-authentication.md)。
+
+## HA-3：跨节点 Agent 路由
+
+PR #30 引入 schema v3 节点 incarnation/10 秒数据库租约、5 秒本地截止时间、递增 Agent generation 与就绪路由、独立 mTLS CONNECT 流及接收端授权重证。包括真实双 Server/LB/Agent 的跨节点流、注销与心跳中断/接管/POST 不重放测试；验收结论以最终 CI 为准。部署见 [HA 手册](ha-operations.md)，实现见 [路由设计](design/cluster-routing.md)。HA-4 继续聚合/来源去重、滚动版本和完整恢复演练。
