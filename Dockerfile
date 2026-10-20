@@ -13,7 +13,10 @@ RUN go mod download
 COPY cmd/ cmd/
 COPY internal/ internal/
 COPY --from=frontend /src/web/out/ internal/web/dist/
-RUN CGO_ENABLED=0 go build -trimpath -o /tunnel ./cmd/tunnel
+ARG VERSION=dev
+ARG COMMIT=none
+ARG BUILD_DATE=unknown
+RUN CGO_ENABLED=0 go build -trimpath -ldflags "-X main.version=${VERSION} -X main.commit=${COMMIT} -X main.date=${BUILD_DATE}" -o /tunnel ./cmd/tunnel
 
 FROM alpine:3.23
 RUN apk add --no-cache ca-certificates && addgroup -S tunnel && adduser -S -G tunnel tunnel && mkdir -p /var/lib/tunnel && chown tunnel:tunnel /var/lib/tunnel

@@ -298,7 +298,7 @@ Compose 默认只将 Go 的 8080 绑定到公网机器的回环地址，由宿�
 
 **当前版本边界：**
 
-- JSON/SQLite 保持单控制面；PostgreSQL 可显式启用 HA-3 集群与 mTLS 跨节点路由，每节点使用独立数据目录。HA-4 的监控/审计聚合和完整滚动恢复仍待实施，见 [HA 手册](docs/ha-operations.md)。不要使用多主机共享文件系统或共享同一数据目录。
+- JSON/SQLite 保持单控制面；PostgreSQL 可显式启用集群与 mTLS 跨节点路由，每节点使用独立数据目录。HA-4 已提供共享监控/审计、节点排空及滚动升级/新库配对恢复验收，见 [HA 手册](docs/ha-operations.md)与[容器部署演练](docs/ha-deployment-lab.md)。不要使用多主机共享文件系统或共享同一数据目录。
 - JSON/SQLite 的用户访问会话与短期票据在内存中，重启后重新登录；PostgreSQL 共享认证保留正常重启前的未到期会话，portable restore 要求重新登录。
 - 授权在每个 HTTP 请求及 WebSocket Upgrade 时检查；退出、密码变更、授权收回或到期主动关闭受影响的请求。删除站点 / 轮换令牌会关闭整个站点隧道。
 - 已支持成员授权编辑、自助改密和管理员重置成员密码；支持显式 OIDC 绑定与账号禁用；已支持离线管理员恢复、OIDC back-channel/RP 退出和可选 acr/amr 策略；支持用户组与一次性成员邀请；已支持组织隔离、自定义管理角色和有界委派；单成员仍只属于一个组织，尚无组织级 IdP。
@@ -381,4 +381,4 @@ SQLite 增量持久化：[设计](docs/design/incremental-sqlite.md) · [操作�
 
 Keycloak 禁用自动撤销：[设计](docs/design/keycloak-session-sync.md) · [配置与演练](docs/keycloak-sync-operations.md)。
 
-PostgreSQL（HA-1）：[事务与单活隔离设计](docs/design/postgres-repository.md) · [迁移/恢复操作](docs/postgres-operations.md)。HA-2 已共享会话/OIDC；HA-3 提供 [节点与内部路由](docs/design/cluster-routing.md)，HA-4 聚合仍待实施。
+PostgreSQL（HA-1）：[事务与单活隔离设计](docs/design/postgres-repository.md) · [迁移/恢复操作](docs/postgres-operations.md)。HA-2 共享会话/OIDC；HA-3 提供[节点与内部路由](docs/design/cluster-routing.md)；HA-4 提供[共享观测、节点排空与恢复](docs/design/cluster-observations.md)。目标环境验收边界见[部署演练](docs/ha-deployment-lab.md)。
