@@ -86,7 +86,17 @@ func (s *Server) dropTransport(id string) {
 		}
 	}
 }
+func (s *Server) snapshotPools() map[string]pooledTransport {
+	s.poolMu.Lock()
+	defer s.poolMu.Unlock()
+	pools := make(map[string]pooledTransport, len(s.pools))
+	for key, pool := range s.pools {
+		pools[key] = pool
+	}
+	return pools
+}
 func (s *Server) pruneSessionPools() {
+	pools := s.snapshotPools()
 	active := map[string]bool{}
 	snapshot, err := s.authSnapshot(context.Background(), false)
 	if err == nil {
@@ -98,7 +108,10 @@ func (s *Server) pruneSessionPools() {
 	}
 	s.poolMu.Lock()
 	defer s.poolMu.Unlock()
-	for key, p := range s.pools {
+	for key, p := range pools {
+		if current, ok := s.pools[key]; !ok || current.transport != p.transport {
+			continue
+		}
 		if p.sessionKey != "" && p.sessionKey != "probe" && !active[p.sessionKey] {
 			p.transport.CloseIdleConnections()
 			delete(s.pools, key)
