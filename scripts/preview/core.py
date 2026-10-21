@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import re
+import signal
 import ssl
 import subprocess
 import tempfile
@@ -18,6 +19,7 @@ from .network import PreviewHTTPSConnection
 
 
 PREVIEW_SLOTS = range(4)
+PROCESS_OWNER_ENV = "TUNNEL_PREVIEW_PROCESS_OWNER"
 
 
 def git(root, *args):
@@ -186,7 +188,72 @@ def process_identity(pid):
 
 
 def process_alive(identity):
-    return bool(identity and process_identity(identity["pid"]) == identity)
+    return bool(identity and process_identity(identity["pid"]) ==
+                {key: identity[key] for key in ("pid", "start", "boot")})
+
+
+def _group_members(identity, known):
+    """Verify ownership even after a session leader has exited and been reaped."""
+    if identity["boot"] != Path("/proc/sys/kernel/random/boot_id").read_text().strip():
+        return []
+    leader = process_identity(identity["pid"])
+    if leader and not process_alive(identity):
+        return []  # The recorded PID was reused; it cannot authorize any signal.
+    members = []
+    for path in Path("/proc").iterdir():
+        if not path.name.isdecimal():
+            continue
+        try:
+            raw = (path / "stat").read_text()
+            fields = raw[raw.rfind(")") + 2:].split()
+            if fields[0] == "Z" or fields[2:4] != [str(identity["pid"])] * 2:
+                continue
+            members.append({"pid": int(path.name), "start": fields[19], "boot": identity["boot"]})
+        except (FileNotFoundError, ProcessLookupError):
+            continue
+    if not members:
+        return []
+    if leader or any(member in known for member in members):
+        return members
+    # New children inherit this random marker. A bare group number is unsafe
+    # after PID reuse; legacy records without proof fail closed and retain data.
+    owner = identity.get("owner")
+    for member in members:
+        try:
+            environment = Path(f"/proc/{member['pid']}/environ").read_bytes().split(b"\0")
+            if owner and f"{PROCESS_OWNER_ENV}={owner}".encode() in environment and process_alive(member):
+                return members
+        except (FileNotFoundError, ProcessLookupError):
+            continue
+    raise RuntimeError("Cannot verify orphaned process group ownership; resource binding retained")
+
+
+def stop_process_groups(identities, grace=10, kill_wait=5):
+    """Stop all owned group members, including descendants outliving the leader."""
+    groups = [(identity, []) for identity in identities]
+
+    def remaining(signum=None):
+        active = False
+        for identity, known in groups:
+            members = _group_members(identity, known)
+            known[:] = members
+            if members:
+                active = True
+                if signum is not None:
+                    try:
+                        os.killpg(identity["pid"], signum)
+                    except ProcessLookupError:
+                        pass
+        return active
+
+    for signum, seconds in ((signal.SIGTERM, grace), (signal.SIGKILL, kill_wait)):
+        remaining(signum)
+        deadline = time.monotonic() + seconds
+        while remaining() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        if not remaining():
+            return
+    raise RuntimeError("Managed process group still exists; resource binding retained")
 
 
 def clean_environment():

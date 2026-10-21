@@ -5,18 +5,20 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import signal
 import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from unittest.mock import patch
 
 SCRIPTS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SCRIPTS))
 from preview.core import (allocate, binding_key, process_alive, process_identity, probe,
-                          read_json, registry, routes, settings, source_identity, write_json)
-from preview.worker import FixtureHandler, FixtureServer, cookie_from
+                          read_json, registry, routes, settings, source_identity, stop_process_groups, write_json)
+from preview.worker import FixtureHandler, FixtureServer, Worker, cookie_from
 import base64
 import http.client
 import socket
@@ -51,6 +53,118 @@ class PreviewTests(unittest.TestCase):
         subprocess.run(["git", "-C", str(root), "add", "."], check=True)
         subprocess.run(["git", "-C", str(root), "-c", "core.hooksPath=/dev/null", "commit", "-qm", "fixture"], check=True)
         return root
+
+    def process_tree(self, worker, behavior="graceful", exit_leader=False):
+        ready = self.directory / "descendant.json"
+        descendant = (
+            "import json,os,signal,sys,time; "
+            "signal.signal(signal.SIGTERM, "
+            + ("signal.SIG_IGN" if behavior == "ignore" else "lambda *_: (time.sleep(0.4), sys.exit(0))")
+            + "); "
+            "open(sys.argv[1], 'w').write(json.dumps({'pid': os.getpid()})); time.sleep(120)"
+        )
+        parent = (
+            "import pathlib,subprocess,sys,time; "
+            "subprocess.Popen([sys.executable, '-c', sys.argv[2], sys.argv[1]]); "
+            "\nwhile not pathlib.Path(sys.argv[1]).exists(): time.sleep(0.01)\n"
+            + ("sys.exit(1)" if exit_leader else "time.sleep(120)")
+        )
+        child = worker.start([sys.executable, "-c", parent, str(ready), descendant], "tree")
+        self.addCleanup(worker.stop_children)
+        # Independent cleanup keeps a failing regression from leaving fixtures behind.
+        def reclaim():
+            try:
+                os.killpg(child.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            child.wait(timeout=5)
+        self.addCleanup(reclaim)
+        deadline = time.monotonic() + 5
+        while not ready.exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertTrue(ready.exists(), "descendant did not initialize")
+        identity = process_identity(read_json(ready)["pid"])
+        self.assertIsNotNone(identity)
+        return child, identity
+
+    def tree_worker(self):
+        root = self.directory / "repo"
+        root.mkdir()
+        binding = allocate(self.home, root)
+        return Worker(self.home, binding)
+
+    def test_worker_cleanup_waits_for_descendant_after_leader_exits(self):
+        worker = self.tree_worker()
+        child, descendant = self.process_tree(worker)
+        worker.stop_children()
+        self.assertFalse(process_alive(descendant), "cleanup returned with a live descendant")
+        self.assertIsNotNone(child.poll())
+
+    def test_cli_cleanup_waits_for_orphaned_descendant(self):
+        worker = self.tree_worker()
+        child, descendant = self.process_tree(worker, exit_leader=True)
+        child.wait(timeout=5)
+        cli.stop(worker.binding)
+        self.assertFalse(process_alive(descendant), "CLI lost ownership after the group leader exited")
+
+    def test_failed_command_cleans_descendant_before_returning(self):
+        worker = self.tree_worker()
+        child, descendant = self.process_tree(worker, exit_leader=True)
+        with patch.object(worker, "start", return_value=child):
+            with self.assertRaisesRegex(RuntimeError, "failed"):
+                worker.run_command([], "tree")
+        self.assertFalse(process_alive(descendant), "failed build left a live descendant")
+
+    def test_group_cleanup_kills_descendant_ignoring_term(self):
+        worker = self.tree_worker()
+        child, descendant = self.process_tree(worker, behavior="ignore", exit_leader=True)
+        child.wait(timeout=5)
+        stop_process_groups([worker.children[0][1]], grace=0.1)
+        self.assertFalse(process_alive(descendant))
+
+    def test_group_cleanup_rejects_wrong_owner_after_leader_exits(self):
+        worker = self.tree_worker()
+        child, descendant = self.process_tree(worker, exit_leader=True)
+        child.wait(timeout=5)
+        wrong = {**worker.children[0][1], "owner": "unrelated-instance"}
+        with self.assertRaisesRegex(RuntimeError, "ownership"):
+            stop_process_groups([wrong], grace=0.1)
+        self.assertTrue(process_alive(descendant))
+        write_json(worker.runtime / "children.json", [wrong])
+        env = {**os.environ, "TUNNEL_PREVIEW_HOME": str(self.home)}
+        result = subprocess.run([sys.executable, str(SCRIPTS / "preview.py"), "destroy", "--root", str(worker.root)],
+                                env=env, capture_output=True, text=True, timeout=10)
+        self.assertEqual(1, result.returncode)
+        self.assertIn("ownership", result.stderr)
+        self.assertTrue(worker.runtime.exists())
+        self.assertEqual(worker.binding, registry(self.home)["bindings"][binding_key(worker.root)])
+        self.assertTrue(process_alive(descendant))
+
+    def test_group_cleanup_preserves_reused_leader_pid(self):
+        worker = self.tree_worker()
+        child, descendant = self.process_tree(worker)
+        wrong = {**worker.children[0][1], "start": "wrong-start-time"}
+        stop_process_groups([wrong], grace=0.1)
+        self.assertIsNone(child.poll())
+        self.assertTrue(process_alive(descendant))
+
+    def test_interrupted_command_waits_for_descendant_cleanup(self):
+        worker = self.tree_worker()
+        child, descendant = self.process_tree(worker)
+        original_wait = child.wait
+        interrupted = False
+
+        def wait(*args, **kwargs):
+            nonlocal interrupted
+            if not interrupted:
+                interrupted = True
+                raise InterruptedError("Preview stopped")
+            return original_wait(*args, **kwargs)
+
+        with patch.object(worker, "start", return_value=child), patch.object(child, "wait", side_effect=wait):
+            with self.assertRaises(InterruptedError):
+                worker.run_command([], "tree")
+        self.assertFalse(process_alive(descendant))
 
     def test_parallel_allocations_are_unique_and_idempotent(self):
         roots = [self.directory / f"repo-{i}" for i in range(4)]

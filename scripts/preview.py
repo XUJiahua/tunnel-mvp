@@ -12,7 +12,7 @@ import time
 
 from preview.core import (PREVIEW_SLOTS, allocate, binding_key, clean_environment, git, inspect, lock, private_dir,
                           process_alive, process_identity, read_json, registry, routes, settings,
-                          slot_config, state_home, write_json)
+                          slot_config, state_home, stop_process_groups, write_json)
 
 
 def stop(binding):
@@ -27,26 +27,20 @@ def stop(binding):
         deadline = time.monotonic() + 25
         while process_alive(worker) and time.monotonic() < deadline:
             time.sleep(0.1)
-    # Reclaim orphaned children after an interrupted or killed supervisor.
-    for identity in children + [worker]:
-        if process_alive(identity):
-            try:
-                if identity is worker:
-                    os.kill(identity["pid"], signal.SIGKILL)
-                else:
-                    os.killpg(identity["pid"], signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-    deadline = time.monotonic() + 10
-    while any(process_alive(child) for child in children) and time.monotonic() < deadline:
-        time.sleep(0.1)
-    for child in children:
-        if process_alive(child):
-            try:
-                os.killpg(child["pid"], signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-    if any(process_alive(child) for child in children + [worker]):
+    if process_alive(worker):
+        try:
+            os.kill(worker["pid"], signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    # Include children registered while the supervisor was handling SIGTERM.
+    for identity in read_json(runtime / "children.json", []):
+        if identity not in children:
+            children.append(identity)
+    stop_process_groups(children)
+    deadline = time.monotonic() + 5
+    while process_alive(worker) and time.monotonic() < deadline:
+        time.sleep(0.05)
+    if process_alive(worker):
         raise RuntimeError("Managed process still exists; resource binding retained")
     write_json(runtime / "status.json", {"phase": "stopped", "updatedAt": time.time()})
 

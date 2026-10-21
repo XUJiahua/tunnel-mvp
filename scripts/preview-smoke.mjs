@@ -58,12 +58,21 @@ try {
     stage = `application ${app.name}: SSE and WebSocket`;
     assert.equal(await appPage.evaluate(() => new Promise((resolve, reject) => {
       const source = new EventSource('/events');
+      window.previewEvents = source;
       const timer = setTimeout(() => { source.close(); reject(Error('SSE timeout')); }, 10000);
-      source.onmessage = event => { clearTimeout(timer); source.close(); resolve(event.data); };
-      source.onerror = () => { clearTimeout(timer); source.close(); reject(Error('SSE failure')); };
+      window.previewEventsClosed = new Promise(done => {
+        source.onerror = () => {
+          clearTimeout(timer);
+          source.close(); // Prevent EventSource from reconnecting after revocation.
+          done(true);
+          reject(Error('SSE ended before its first event'));
+        };
+      });
+      source.onmessage = event => { clearTimeout(timer); resolve(event.data); };
     })), 'preview-event');
     assert.equal(await appPage.evaluate(() => new Promise((resolve, reject) => {
       const ws = new WebSocket(location.origin.replace(/^http/, 'ws') + '/ws');
+      window.previewSocket = ws;
       const timer = setTimeout(() => { ws.close(); reject(Error('WS timeout')); }, 10000);
       window.previewSocketClosed = new Promise(done => ws.addEventListener('close', () => done(true)));
       ws.onopen = () => ws.send('preview-echo');
@@ -73,14 +82,19 @@ try {
     pass(stage);
     appPages.push({ page: appPage, url: app.url });
   }
-  stage = 'logout revokes both application sessions and active WebSockets';
+  stage = 'logout revokes both application sessions and active SSE/WebSockets';
+  for (const app of appPages) {
+    assert(await app.page.evaluate(() =>
+      window.previewEvents.readyState === EventSource.OPEN && window.previewSocket.readyState === WebSocket.OPEN),
+      'SSE and WebSocket must still be active before logout');
+  }
   const logout = await context.request.post(binding.origin + '/api/logout', { headers: { Origin: binding.origin } });
   assert.equal(logout.status(), 200);
   for (const app of appPages) {
     assert(await app.page.evaluate(() => Promise.race([
-      window.previewSocketClosed,
+      Promise.all([window.previewEventsClosed, window.previewSocketClosed]).then(() => true),
       new Promise(resolve => setTimeout(() => resolve(false), 10000)),
-    ])));
+    ])), 'Logout must terminate the existing SSE and WebSocket connections');
     const denied = await context.request.get(app.url, { maxRetries: 2 });
     assert([401, 403].includes(denied.status()));
   }

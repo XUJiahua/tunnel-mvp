@@ -17,8 +17,8 @@ import time
 from urllib.parse import urlsplit
 import uuid
 
-from .core import (clean_environment, git, lock, private_dir, probe, process_alive,
-                   process_identity, read_json, request, sha256, source_identity, write_json)
+from .core import (PROCESS_OWNER_ENV, clean_environment, lock, private_dir, probe,
+                   process_identity, read_json, request, sha256, source_identity, stop_process_groups, write_json)
 
 
 class FixtureServer(ThreadingHTTPServer):
@@ -134,13 +134,16 @@ class Worker:
     def start(self, command, label, extra=None):
         handle = open(self.runtime / (label + ".log"), "ab", buffering=0)
         self.handles.append(handle)
-        child = subprocess.Popen(command, cwd=self.root, env={**clean_environment(), **(extra or {})},
+        owner = uuid.uuid4().hex
+        child = subprocess.Popen(command, cwd=self.root,
+                                 env={**clean_environment(), **(extra or {}), PROCESS_OWNER_ENV: owner},
                                  stdin=subprocess.DEVNULL, stdout=handle, stderr=handle, start_new_session=True)
         identity = process_identity(child.pid)
         if not identity:
             raise RuntimeError(f"{label} exited before process registration")
+        identity["owner"] = owner
         self.children.append((child, identity))
-        write_json(self.runtime / "children.json", [identity for child, identity in self.children if child.poll() is None])
+        write_json(self.runtime / "children.json", [identity for child, identity in self.children])
         return child
 
     def run_command(self, command, label, extra=None):
@@ -148,17 +151,12 @@ class Worker:
         try:
             if child.wait() != 0:
                 raise RuntimeError(f"{label} failed; inspect {self.runtime / (label + '.log')}")
-        except BaseException:
+        finally:
             # Stop the build while still holding build.lock, before another
             # worktree can acquire it and rewrite the same dependency caches.
-            if child.poll() is None:
-                os.killpg(child.pid, signal.SIGTERM)
-                try:
-                    child.wait(timeout=10)
-                except subprocess.TimeoutExpired:
-                    os.killpg(child.pid, signal.SIGKILL)
-                    child.wait(timeout=5)
-            raise
+            identity = next(identity for process, identity in self.children if process is child)
+            stop_process_groups([identity])
+            child.wait(timeout=5)
 
     def wait(self, predicate, seconds=60):
         deadline = time.monotonic() + seconds
@@ -262,17 +260,9 @@ class Worker:
         self.api("/logout", "POST")
 
     def stop_children(self):
-        for child, identity in reversed(self.children):
-            if process_alive(identity):
-                try:
-                    os.killpg(child.pid, signal.SIGTERM)
-                    child.wait(timeout=10)
-                except subprocess.TimeoutExpired:
-                    if process_alive(identity):
-                        os.killpg(child.pid, signal.SIGKILL)
-                    child.wait(timeout=5)
-                except ProcessLookupError:
-                    pass
+        stop_process_groups([identity for _, identity in self.children])
+        for child, _ in self.children:
+            child.wait(timeout=5)
         for server in self.upstreams:
             server.shutdown()
             server.server_close()
