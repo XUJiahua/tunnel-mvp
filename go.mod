@@ -2,6 +2,8 @@ module github.com/XUJiahua/tunnel-mvp
 
 go 1.27.0
 
+toolchain go1.27.2
+
 require (
 	github.com/coreos/go-oidc/v3 v3.19.0
 	github.com/gofrs/flock v0.12.1

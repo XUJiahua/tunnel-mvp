@@ -10,6 +10,8 @@
 
 ## 文档
 
+- [AI 开发工作流](docs/agent-development-workflow.md)、[开发环境准备](docs/development-environment.md)、[Worktree 预览](docs/worktree-preview.md)：Paseo 命令、隔离环境、cubbber.dev 域名与交付检查。
+
 - [操作手册](docs/operations.md)：升级、资源管理、权限、密码、ACL 重载、监控与备份。
 - [设计说明](docs/design/operations-and-access.md)：授权语义、会话撤销、连接池隔离和兼容性。
 - [存储设计](docs/design/storage.md)与[迁移/备份恢复手册](docs/storage-operations.md)：JSON / SQLite、目录锁与离线维护；[PostgreSQL 操作](docs/postgres-operations.md)提供数据库后端；[HA 配置](docs/ha-operations.md)说明显式集群与内部 mTLS。
@@ -108,7 +110,7 @@ Windows 可用 `Get-FileHash .\tunnel_0.1.1_windows_amd64.zip -Algorithm SHA256`
 
 ## 本地启动
 
-构建需要 Go **1.27+**、Node.js **24+** 和 pnpm **12.14.0**（版本固定在 `web/package.json`）。可通过 `corepack enable` 启用 pnpm。运行产物只需要操作系统的 CA / DNS 环境。
+构建需要 Go **1.27.2+**、Node.js **24+** 和 pnpm **12.14.0**（版本固定在 `web/package.json`）。可通过 `corepack enable` 启用 pnpm。运行产物只需要操作系统的 CA / DNS 环境。
 
 ```bash
 git clone https://github.com/XUJiahua/tunnel-mvp.git

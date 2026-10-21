@@ -26,8 +26,22 @@ jobs:
           cache: pnpm
           cache-dependency-path: web/pnpm-lock.yaml
       - run: make build
+      - name: Verify development infrastructure
+        run: python3 scripts/dev.py verify --profile infrastructure
       - run: pnpm exec playwright install --with-deps chromium
         working-directory: web
+      - name: Verify isolated preview lifecycle and real browser revocation
+        env:
+          TUNNEL_PREVIEW_HOME: ${{ runner.temp }}/tunnel-worktree-preview
+        run: |
+          trap 'python3 scripts/preview.py destroy --if-exists' EXIT
+          python3 scripts/preview.py up --local --slot 0
+          python3 scripts/preview.py smoke
+          python3 scripts/preview.py stop
+          python3 scripts/preview.py up
+          python3 scripts/preview.py smoke
+          python3 scripts/preview.py refresh
+          python3 scripts/preview.py smoke
       - name: Verify directory conflict recovery before the full regression
         working-directory: web
         run: |

@@ -1,0 +1,22 @@
+{
+  "worktree": {
+    "setup": "bash scripts/install-git-hooks.sh",
+    "teardown": "python3 scripts/preview.py destroy --if-exists"
+  },
+  "scripts": {
+    "doctor": { "command": "python3 scripts/dev.py doctor" },
+    "install": { "command": "python3 scripts/dev.py install" },
+    "verify": { "command": "python3 scripts/dev.py verify" },
+    "verify-browser": { "command": "python3 scripts/dev.py verify --profile browser" },
+    "verify-postgres": { "command": "python3 scripts/dev.py verify --profile postgres" },
+    "verify-ha": { "command": "python3 scripts/dev.py verify --profile ha" },
+    "preview": { "command": "python3 scripts/preview.py up" },
+    "preview-local": { "command": "python3 scripts/preview.py up --local" },
+    "preview-refresh": { "command": "python3 scripts/preview.py refresh" },
+    "preview-status": { "command": "python3 scripts/preview.py status" },
+    "preview-smoke": { "command": "python3 scripts/preview.py smoke" },
+    "preview-url": { "command": "python3 scripts/preview.py url" },
+    "preview-stop": { "command": "python3 scripts/preview.py stop --if-exists" },
+    "preview-destroy": { "command": "python3 scripts/preview.py destroy --if-exists" }
+  }
+}

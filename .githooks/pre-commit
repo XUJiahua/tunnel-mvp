@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+set -euo pipefail
+git diff --cached --check
+if git diff --cached --name-only | grep -Eq '^(scripts/(preview|tests/|dev\.py)|paseo\.json)'; then
+  python3 scripts/dev.py verify --profile infrastructure
+fi

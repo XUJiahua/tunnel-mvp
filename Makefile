@@ -1,9 +1,10 @@
 GO ?= go
+PNPM ?= corepack pnpm
 GORELEASER ?= goreleaser
 GORELEASER_VERSION := 2.17.1
 .PHONY: build frontend test clean release-check release-snapshot example-oidc
 frontend:
-	cd web && pnpm install --frozen-lockfile && pnpm run build
+	cd web && $(PNPM) install --frozen-lockfile && $(PNPM) run build
 	node scripts/embed.mjs
 build: frontend
 	mkdir -p bin
@@ -20,7 +21,31 @@ test:
 	$(GO) -C examples/oidc-app vet ./...
 	$(GO) -C third_party/remotedialer vet ./...
 	$(GO) vet ./...
-	cd web && pnpm run typecheck && pnpm run test:unit
+	cd web && $(PNPM) run typecheck && $(PNPM) run test:unit
+
+.PHONY: doctor install verify verify-infrastructure preview preview-local preview-refresh preview-status preview-url preview-stop preview-destroy
+doctor:
+	python3 scripts/dev.py doctor
+install:
+	python3 scripts/dev.py install
+verify:
+	python3 scripts/dev.py verify
+verify-infrastructure:
+	python3 scripts/dev.py verify --profile infrastructure
+preview:
+	python3 scripts/preview.py up
+preview-local:
+	python3 scripts/preview.py up --local
+preview-refresh:
+	python3 scripts/preview.py refresh
+preview-status:
+	python3 scripts/preview.py status
+preview-url:
+	python3 scripts/preview.py url
+preview-stop:
+	python3 scripts/preview.py stop --if-exists
+preview-destroy:
+	python3 scripts/preview.py destroy --if-exists
 clean:
 	rm -rf bin web/.next web/out internal/web/dist
 	mkdir -p internal/web/dist
